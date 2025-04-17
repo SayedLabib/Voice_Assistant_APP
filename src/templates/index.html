@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Assistant</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Voice Assistant</h1>
+        <div class="mic-container">
+            <button id="mic-button" class="mic-button">
+                <span class="mic-icon">🎤</span>
+            </button>
+            <div class="pulse-ring"></div>
+        </div>
+        <p id="status-text">Klicken Sie auf das Mikrofon, um zu sprechen...</p>
+        <div class="text-output">
+            <p>Erkannter Text:</p>
+            <div id="recognized-text" class="text-display"></div>
+        </div>
+    </div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

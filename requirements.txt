@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydub
+gTTS
+python-dotenv
+websockets
+jinja2
+aiofiles
+requests
+translate
