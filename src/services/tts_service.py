@@ -20,10 +20,10 @@ class TTSService:
         # Get available voices
         voices = self.engine.getProperty('voices')
         
-        # Set male voice - typically voice ID 0 is male, but we'll check for language match too
+        # Set male voice - look for a male voice in the requested language
         male_voice = None
         for voice in voices:
-            # Look for a male voice in the requested language
+            # Check if this is a male voice and matches our language
             if self.language in voice.id.lower() and ('male' in voice.id.lower() or not 'female' in voice.id.lower()):
                 male_voice = voice.id
                 break
@@ -31,11 +31,21 @@ class TTSService:
         # If we found a language-specific male voice, use it
         if male_voice:
             self.engine.setProperty('voice', male_voice)
-        # Otherwise, just use the first voice (usually male)
-        elif voices:
-            self.engine.setProperty('voice', voices[0].id)
+        # Otherwise, try to find any male voice
+        else:
+            # Look for any male voice
+            for voice in voices:
+                if 'male' in voice.id.lower() or not 'female' in voice.id.lower():
+                    male_voice = voice.id
+                    break
             
-        # Set speech rate and volume
+            # Use the first male voice found or default to the first voice
+            if male_voice:
+                self.engine.setProperty('voice', male_voice)
+            elif voices:
+                self.engine.setProperty('voice', voices[0].id)
+            
+        # Set speech rate and volume for better quality
         self.engine.setProperty('rate', 150)    # Speed of speech
         self.engine.setProperty('volume', 0.9)  # Volume (0.0 to 1.0)
         
