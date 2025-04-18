@@ -3,12 +3,43 @@ document.addEventListener('DOMContentLoaded', function() {
     const micButton = document.getElementById('mic-button');
     const pulseRing = document.querySelector('.pulse-ring');
     const statusText = document.getElementById('status-text');
-    const recognizedTextElement = document.getElementById('recognized-text');
+    const originalTextElement = document.getElementById('original-text'); // Updated element ID
+    const translatedTextElement = document.getElementById('translated-text'); // Updated element ID
+    const languageSelectorContainer = document.querySelector('.language-selector-container');
 
     // State variables
     let isListening = false;
     let autoRestart = true;
     let processingAudio = false;
+    
+    // Choose whether to use Whisper API (better quality) or Web Speech API (faster)
+    const useWhisper = true; // Set to false to use Web Speech API instead
+    
+    // Audio recording variables for Whisper
+    let mediaRecorder = null;
+    let audioChunks = [];
+    
+    // Language selection
+    // Define languages we explicitly want to support
+    const supportedLanguages = [
+        { code: 'en-US', name: 'English', shortCode: 'en' },
+        { code: 'de-DE', name: 'Deutsch', shortCode: 'de' },
+        { code: 'bn-BD', name: 'বাংলা', shortCode: 'bn' },
+        { code: 'hi-IN', name: 'हिन्दी', shortCode: 'hi' },
+        { code: 'ur-PK', name: 'اردو', shortCode: 'ur' },
+        { code: 'ar-SA', name: 'العربية', shortCode: 'ar' },
+        { code: 'es-ES', name: 'Español', shortCode: 'es' },
+        { code: 'fr-FR', name: 'Français', shortCode: 'fr' },
+        { code: 'ru-RU', name: 'Русский', shortCode: 'ru' },
+        { code: 'zh-CN', name: '中文', shortCode: 'zh' },
+        { code: 'ja-JP', name: '日本語', shortCode: 'ja' }
+    ];
+    
+    // Get saved preference on startup or default to 0 (English)
+    let currentLanguageIndex = parseInt(localStorage.getItem('preferredLanguageIndex') || '0');
+    
+    // Setup language selector
+    createLanguageSelector();
     
     // WebSocket setup
     let socket = null;
@@ -42,8 +73,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.log('Message from server:', data);
                 
                 if (data.type === 'processed_speech') {
-                    // Display the translated text
-                    recognizedTextElement.textContent = data.translated_text;
+                    // Get the detected language from the backend response
+                    // If not provided, fallback to the selected language
+                    const detectedLangCode = data.detected_language || supportedLanguages[currentLanguageIndex].shortCode;
+                    console.log(`Detected language: ${detectedLangCode}`);
+                    
+                    // Display the original text with the detected language's font
+                    originalTextElement.className = `text-display original-text lang-${detectedLangCode}`;
+                    originalTextElement.textContent = data.original_text;
+                    
+                    // Display the translated German text
+                    translatedTextElement.className = 'text-display translated-text lang-de';
+                    translatedTextElement.textContent = data.translated_text;
+                    
+                    // Update the status to show detected language
+                    const detectedLangName = supportedLanguages.find(lang => lang.shortCode === detectedLangCode)?.name || detectedLangCode;
+                    showTemporaryMessage(`Detected: ${detectedLangName}`, "info");
                     
                     // Play the audio
                     await playAudio(data.audio_data);
@@ -51,7 +96,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     // After audio playback, restart listening if enabled
                     if (isListening && autoRestart) {
                         statusText.textContent = 'Zuhören... Sprechen Sie bitte.';
-                        if (recognition) {
+                        if (useWhisper) {
+                            processingAudio = false;
+                            startWhisperRecording();
+                        } else if (recognition) {
                             processingAudio = false;
                             recognition.start();
                         }
@@ -59,15 +107,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else if (data.type === 'audio') {
                     // Play the audio
                     if (data.text) {
-                        recognizedTextElement.textContent = data.text;
+                        translatedTextElement.textContent = data.text;
                     }
                     await playAudio(data.audio_data);
                 } else if (data.type === 'error') {
                     // Show error message
                     showTemporaryMessage(`Fehler: ${data.message}`, "error");
+                    processingAudio = false;
                 }
             } catch (error) {
                 console.error('Error processing message:', error);
+                processingAudio = false;
             }
         };
         
@@ -98,7 +148,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize the WebSocket connection when the page loads
     initializeWebSocket();
     
-    // Web Speech API setup
+    // Web Speech API setup (fallback for when not using Whisper)
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
     
@@ -108,35 +158,82 @@ document.addEventListener('DOMContentLoaded', function() {
         // Configure recognition
         recognition.continuous = false; // Get a single result
         recognition.interimResults = false; // Only final results
-        recognition.lang = 'auto'; // Auto-detect language
+        
+        // Set the initial language
+        recognition.lang = supportedLanguages[currentLanguageIndex].code;
         
         // Handle speech recognition results
         recognition.onresult = (event) => {
             const transcript = event.results[0][0].transcript.trim();
             const confidence = event.results[0][0].confidence;
             
-            console.log(`Speech recognized: ${transcript} (Confidence: ${confidence})`);
+            console.log(`Speech recognized (${recognition.lang}): ${transcript} (Confidence: ${confidence})`);
+            
+            // If confidence is too low, it might be the wrong language
+            if (confidence < 0.5 && currentLanguageIndex < supportedLanguages.length - 1) {
+                // Try next language
+                currentLanguageIndex++;
+                recognition.lang = supportedLanguages[currentLanguageIndex].code;
+                showTemporaryMessage(`Versuche ${supportedLanguages[currentLanguageIndex].name}...`, "processing");
+                
+                if (isListening && !processingAudio) {
+                    setTimeout(() => recognition.start(), 300);
+                }
+                return;
+            }
             
             // Show the recognized text temporarily
-            showTemporaryMessage(`Erkannt: "${transcript}"`, "processing");
+            showTemporaryMessage(`Erkannt (${supportedLanguages[currentLanguageIndex].name}): "${transcript}"`, "processing");
+            
+            // Reset language index for next recognition
+            currentLanguageIndex = 0;
+            recognition.lang = supportedLanguages[currentLanguageIndex].code;
             
             // Process the speech using WebSocket
-            processSpeechWithWebSocket(transcript);
+            processSpeechWithWebSocket(transcript, recognition.lang);
         };
         
         // Handle speech recognition errors
         recognition.onerror = (event) => {
-            console.error('Speech recognition error', event.error);
+            console.error('Speech recognition error', event.error, 'in language', recognition.lang);
             
             if (event.error === 'no-speech') {
-                showTemporaryMessage("Keine Sprache erkannt. Bitte sprechen Sie.", "error");
-                // Restart recognition if we're still in listening mode
-                if (isListening && autoRestart && !processingAudio) {
-                    setTimeout(() => recognition.start(), 300);
+                // If no speech was detected for the current language, try another language
+                if (currentLanguageIndex < supportedLanguages.length - 1) {
+                    currentLanguageIndex++;
+                    recognition.lang = supportedLanguages[currentLanguageIndex].code;
+                    console.log(`Trying next language: ${recognition.lang}`);
+                    
+                    if (isListening && autoRestart && !processingAudio) {
+                        setTimeout(() => recognition.start(), 300);
+                    }
+                } else {
+                    // We've tried all languages, reset and show message
+                    currentLanguageIndex = 0;
+                    recognition.lang = supportedLanguages[currentLanguageIndex].code;
+                    showTemporaryMessage("Keine Sprache erkannt. Bitte sprechen Sie.", "error");
+                    
+                    if (isListening && autoRestart && !processingAudio) {
+                        setTimeout(() => recognition.start(), 300);
+                    }
+                }
+            } else if (event.error === 'language-not-supported') {
+                // If the language is not supported, try the next one
+                if (currentLanguageIndex < supportedLanguages.length - 1) {
+                    currentLanguageIndex++;
+                    recognition.lang = supportedLanguages[currentLanguageIndex].code;
+                    console.log(`Language not supported, trying: ${recognition.lang}`);
+                    
+                    if (isListening && autoRestart && !processingAudio) {
+                        setTimeout(() => recognition.start(), 300);
+                    }
                 }
             } else {
+                // For other errors
                 statusText.textContent = `Fehler: ${event.error}`;
-                updateUI(false);
+                if (isListening && autoRestart && !processingAudio) {
+                    setTimeout(() => recognition.start(), 1000);
+                }
             }
         };
         
@@ -157,8 +254,131 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
+    // Function to start recording audio for Whisper API
+    async function startWhisperRecording() {
+        if (processingAudio) return;
+        
+        try {
+            // Reset audio chunks
+            audioChunks = [];
+            
+            // Get microphone access if needed
+            if (!mediaRecorder) {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: 16000
+                    } 
+                });
+                
+                // Create media recorder with optimized settings for Whisper
+                const options = {
+                    mimeType: 'audio/webm',
+                    audioBitsPerSecond: 128000
+                };
+                
+                mediaRecorder = new MediaRecorder(stream, options);
+                
+                // Handle data available event
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+                
+                // Handle recording stop event
+                mediaRecorder.onstop = async () => {
+                    if (!isListening || audioChunks.length === 0) return;
+                    
+                    processingAudio = true;
+                    showTemporaryMessage(`Processing audio in ${supportedLanguages[currentLanguageIndex].name}...`, "processing");
+                    
+                    try {
+                        // Convert chunks to blob
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        
+                        // Convert blob to base64
+                        const base64Audio = await blobToBase64(audioBlob);
+                        
+                        // Send to server for processing with the current language
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            // Get the current language code without region
+                            const languageCode = supportedLanguages[currentLanguageIndex].shortCode;
+                            console.log(`Sending audio for processing in language: ${supportedLanguages[currentLanguageIndex].name} (${languageCode})`);
+                            
+                            socket.send(JSON.stringify({
+                                action: 'process_audio',
+                                audio_data: base64Audio,
+                                language: languageCode
+                            }));
+                        } else {
+                            showTemporaryMessage("No connection to server.", "error");
+                            processingAudio = false;
+                        }
+                    } catch (error) {
+                        console.error("Error processing recording:", error);
+                        showTemporaryMessage(`Fehler bei der Verarbeitung: ${error.message}`, "error");
+                        processingAudio = false;
+                        
+                        // Restart recording if still listening
+                        if (isListening && autoRestart) {
+                            setTimeout(startWhisperRecording, 1000);
+                        }
+                    }
+                };
+            }
+            
+            // Set up recording duration with a more flexible approach
+            const minRecordingDuration = 3000; // Minimum 3 seconds
+            const maxRecordingDuration = 8000; // Maximum 8 seconds
+            const defaultRecordingDuration = 6000; // Default 6 seconds
+            
+            // Get recording duration from user preference or use default
+            const recordingDuration = localStorage.getItem('whisperRecordingDuration') || defaultRecordingDuration;
+            
+            // Start recording
+            mediaRecorder.start();
+            
+            // Show recording indicator with countdown and language
+            const currentLang = supportedLanguages[currentLanguageIndex].name;
+            showTemporaryMessage(`Recording (${Math.round(recordingDuration/1000)}s)... [${currentLang}]`, "processing");
+            
+            // Stop recording after duration
+            setTimeout(() => {
+                if (mediaRecorder && mediaRecorder.state === "recording") {
+                    mediaRecorder.stop();
+                }
+            }, recordingDuration);
+            
+        } catch (error) {
+            console.error("Error accessing microphone:", error);
+            showTemporaryMessage(`Mikrofonfehler: ${error.message}`, "error");
+            
+            // Fall back to Web Speech API if available
+            if (!useWhisper && recognition && isListening) {
+                recognition.start();
+            }
+        }
+    }
+    
+    // Helper function to convert blob to base64
+    function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                // Remove data URL prefix (data:audio/webm;base64,)
+                const base64String = reader.result.split(',')[1];
+                resolve(base64String);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    }
+    
     // Process speech with WebSocket
-    function processSpeechWithWebSocket(text) {
+    function processSpeechWithWebSocket(text, sourceLanguage) {
         if (!socket || socket.readyState !== WebSocket.OPEN) {
             showTemporaryMessage('Keine Verbindung zum Server.', "error");
             return;
@@ -166,11 +386,14 @@ document.addEventListener('DOMContentLoaded', function() {
         
         processingAudio = true;
         
+        // Extract language code without region
+        const languageCode = sourceLanguage.split('-')[0];
+        
         // Send to the server for translation and TTS
         socket.send(JSON.stringify({
             action: 'process_speech',
             text: text,
-            language: 'auto'
+            language: languageCode
         }));
     }
     
@@ -182,6 +405,12 @@ document.addEventListener('DOMContentLoaded', function() {
             micButton.classList.add('active');
             pulseRing.classList.add('active');
             statusText.textContent = 'Zuhören... Sprechen Sie bitte.';
+            
+            // Reset language index when starting fresh
+            currentLanguageIndex = 0;
+            if (!useWhisper && recognition) {
+                recognition.lang = supportedLanguages[currentLanguageIndex].code;
+            }
         } else {
             micButton.classList.remove('active');
             pulseRing.classList.remove('active');
@@ -219,7 +448,21 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Start speech recognition
     function startListening() {
-        if (!recognition) {
+        if (useWhisper) {
+            // Using Whisper API
+            startWhisperRecording();
+        } else if (recognition) {
+            // Using Web Speech API
+            try {
+                // Use the currently selected language
+                recognition.lang = supportedLanguages[currentLanguageIndex].code;
+                recognition.start();
+            } catch (error) {
+                console.error('Error starting speech recognition:', error);
+                statusText.textContent = `Fehler: ${error.message}`;
+                return;
+            }
+        } else {
             statusText.textContent = 'Spracherkennung wird nicht unterstützt.';
             return;
         }
@@ -229,34 +472,44 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        try {
-            autoRestart = true;
-            processingAudio = false;
-            recognition.start();
-            updateUI(true);
-            
-            // Clear previous recognized text
-            recognizedTextElement.textContent = '';
-        } catch (error) {
-            console.error('Error starting speech recognition:', error);
-            statusText.textContent = `Fehler: ${error.message}`;
+        autoRestart = true;
+        processingAudio = false;
+        
+        // Do NOT reset the language index here - keep the user's selection
+        if (!useWhisper && recognition) {
+            recognition.lang = supportedLanguages[currentLanguageIndex].code;
         }
+        
+        updateUI(true);
+        
+        // Clear previous recognized text
+        originalTextElement.textContent = '';
+        translatedTextElement.textContent = '';
+        
+        // Show selected language under mic
+        statusText.textContent = `Listening in ${supportedLanguages[currentLanguageIndex].name}...`;
     }
     
     // Stop speech recognition
     function stopListening() {
-        if (!recognition) {
-            return;
+        autoRestart = false;
+        processingAudio = false;
+        
+        if (useWhisper) {
+            // Stop whisper recording
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                mediaRecorder.stop();
+            }
+        } else if (recognition) {
+            // Stop Web Speech API
+            try {
+                recognition.stop();
+            } catch (error) {
+                console.error('Error stopping speech recognition:', error);
+            }
         }
         
-        try {
-            autoRestart = false;
-            processingAudio = false;
-            recognition.stop();
-            updateUI(false);
-        } catch (error) {
-            console.error('Error stopping speech recognition:', error);
-        }
+        updateUI(false);
     }
     
     // Show a temporary message that reverts back after a delay
@@ -279,6 +532,57 @@ document.addEventListener('DOMContentLoaded', function() {
                 statusText.className = originalClass;
             }, 3000);
         }
+    }
+    
+    // Add language selector functionality
+    function createLanguageSelector() {
+        if (!languageSelectorContainer) return;
+        
+        // Create language selector element
+        const selectorHTML = `
+            <div class="language-selector">
+                <p>Select your language:</p>
+                <div class="language-buttons"></div>
+                <p id="selected-language-display">Current: ${supportedLanguages[currentLanguageIndex].name}</p>
+            </div>
+        `;
+        
+        languageSelectorContainer.innerHTML = selectorHTML;
+        
+        // Create buttons for each language
+        const buttonsContainer = document.querySelector('.language-buttons');
+        supportedLanguages.forEach((lang, index) => {
+            const button = document.createElement('button');
+            button.className = 'language-button ' + (index === currentLanguageIndex ? 'active' : '');
+            button.dataset.index = index;
+            button.title = lang.name;
+            button.textContent = lang.name;
+            
+            button.addEventListener('click', function() {
+                // Update active language
+                currentLanguageIndex = parseInt(this.dataset.index);
+                
+                // Update UI
+                document.querySelectorAll('.language-button').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                this.classList.add('active');
+                
+                // Update display text
+                const displayElement = document.getElementById('selected-language-display');
+                if (displayElement) {
+                    displayElement.textContent = `Current: ${supportedLanguages[currentLanguageIndex].name}`;
+                }
+                
+                // Store preference
+                localStorage.setItem('preferredLanguageIndex', currentLanguageIndex);
+                
+                // Show confirmation message
+                showTemporaryMessage(`Language set to ${supportedLanguages[currentLanguageIndex].name}`, "info");
+            });
+            
+            buttonsContainer.appendChild(button);
+        });
     }
     
     // Start or stop listening when the mic button is clicked

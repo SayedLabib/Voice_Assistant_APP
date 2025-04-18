@@ -5,10 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Voice Assistant</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Add language fonts support -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;700&family=Noto+Sans+Bengali&family=Noto+Sans+Arabic&family=Noto+Sans+JP&family=Noto+Sans+SC&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
         <h1>Voice Assistant</h1>
+        
+        <!-- Language selector will be inserted here by JavaScript -->
+        <div class="language-selector-container"></div>
+        
         <div class="mic-container">
             <button id="mic-button" class="mic-button">
                 <span class="mic-icon">🎤</span>
@@ -16,9 +22,15 @@
             <div class="pulse-ring"></div>
         </div>
         <p id="status-text">Klicken Sie auf das Mikrofon, um zu sprechen...</p>
+        
         <div class="text-output">
-            <p>Erkannter Text:</p>
-            <div id="recognized-text" class="text-display"></div>
+            <!-- Original text in detected language -->
+            <p class="text-label">Original:</p>
+            <div id="original-text" class="text-display original-text"></div>
+            
+            <!-- Translated text in German -->
+            <p class="text-label">Übersetzt (Deutsch):</p>
+            <div id="translated-text" class="text-display translated-text"></div>
         </div>
     </div>
     <script src="/static/js/app.js"></script>

@@ -149,6 +149,147 @@ h1 {
   overflow-y: auto;
 }
 
+/* Add language selector styles */
+.language-selector {
+    text-align: center;
+    margin-bottom: 15px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#language-toggle {
+    background: #4285f4;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    cursor: pointer;
+    margin-bottom: 8px;
+    font-size: 18px;
+    transition: background-color 0.3s;
+}
+
+#language-toggle:hover {
+    background: #2a75f3;
+}
+
+#current-language {
+    font-size: 14px;
+    color: #555;
+    font-weight: 500;
+}
+
+/* Original text display */
+.text-output {
+    margin-top: 20px;
+    width: 100%;
+}
+
+.text-display {
+    min-height: 60px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 15px;
+    background-color: #f9f9f9;
+    word-wrap: break-word;
+}
+
+.original-text {
+    color: #555;
+    margin-bottom: 15px;
+}
+
+.translated-text {
+    color: #333;
+    font-weight: 500;
+}
+
+.text-label {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+/* Language specific font families */
+.lang-en {
+  font-family: 'Noto Sans', sans-serif;
+}
+
+.lang-de {
+  font-family: 'Noto Sans', sans-serif;
+}
+
+.lang-bn {
+  font-family: 'Noto Sans Bengali', sans-serif;
+}
+
+.lang-hi {
+  font-family: 'Noto Sans', sans-serif;
+}
+
+.lang-ur {
+  font-family: 'Noto Sans', sans-serif;
+  direction: rtl;
+}
+
+.lang-ar {
+  font-family: 'Noto Sans Arabic', sans-serif;
+  direction: rtl;
+}
+
+.lang-es, .lang-fr, .lang-ru {
+  font-family: 'Noto Sans', sans-serif;
+}
+
+.lang-zh {
+  font-family: 'Noto Sans SC', sans-serif;
+}
+
+.lang-ja {
+  font-family: 'Noto Sans JP', sans-serif;
+}
+
+/* Better language selector styling */
+.language-selector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.language-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  max-width: 400px;
+}
+
+.language-button {
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.language-button:hover {
+  background: #e0e0e0;
+}
+
+.language-button.active {
+  background: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
 @media (max-width: 768px) {
   .container {
     width: 95%;
