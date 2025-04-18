@@ -2,6 +2,7 @@ fastapi
 uvicorn
 pydub
 gTTS
+pyttsx3>=2.90
 python-dotenv
 websockets
 jinja2

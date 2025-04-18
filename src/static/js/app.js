@@ -3,8 +3,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const micButton = document.getElementById('mic-button');
     const pulseRing = document.querySelector('.pulse-ring');
     const statusText = document.getElementById('status-text');
-    const originalTextElement = document.getElementById('original-text'); // Updated element ID
-    const translatedTextElement = document.getElementById('translated-text'); // Updated element ID
+    const originalTextElement = document.getElementById('original-text');
+    const translatedTextElement = document.getElementById('translated-text');
     const languageSelectorContainer = document.querySelector('.language-selector-container');
 
     // State variables
@@ -12,15 +12,23 @@ document.addEventListener('DOMContentLoaded', function() {
     let autoRestart = true;
     let processingAudio = false;
     
-    // Choose whether to use Whisper API (better quality) or Web Speech API (faster)
-    const useWhisper = true; // Set to false to use Web Speech API instead
-    
     // Audio recording variables for Whisper
     let mediaRecorder = null;
     let audioChunks = [];
     
+    // Voice detection variables
+    let audioContext = null;
+    let analyser = null;
+    let silenceTimer = null;
+    let voiceDetected = false;
+    let silenceDuration = 0;
+    let audioBufferCache = []; // Keep recent audio levels to detect consistent voice patterns
+    const silenceThreshold = -45; // Threshold to be less sensitive to background noise
+    const speechConsistencyThreshold = 3; // Number of consecutive frames needed to confirm speech
+    const maxRecordingDuration = 15000; // Maximum recording duration (15 seconds)
+    const silenceStopDuration = 3000; // Stop after 3 seconds of silence (reduced from 5 seconds)
+    
     // Language selection
-    // Define languages we explicitly want to support
     const supportedLanguages = [
         { code: 'en-US', name: 'English', shortCode: 'en' },
         { code: 'de-DE', name: 'Deutsch', shortCode: 'de' },
@@ -96,13 +104,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     // After audio playback, restart listening if enabled
                     if (isListening && autoRestart) {
                         statusText.textContent = 'Zuhören... Sprechen Sie bitte.';
-                        if (useWhisper) {
-                            processingAudio = false;
-                            startWhisperRecording();
-                        } else if (recognition) {
-                            processingAudio = false;
-                            recognition.start();
-                        }
+                        processingAudio = false;
+                        startRecording();
                     }
                 } else if (data.type === 'audio') {
                     // Play the audio
@@ -148,138 +151,85 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize the WebSocket connection when the page loads
     initializeWebSocket();
     
-    // Web Speech API setup (fallback for when not using Whisper)
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    let recognition = null;
-    
-    if (SpeechRecognition) {
-        recognition = new SpeechRecognition();
-        
-        // Configure recognition
-        recognition.continuous = false; // Get a single result
-        recognition.interimResults = false; // Only final results
-        
-        // Set the initial language
-        recognition.lang = supportedLanguages[currentLanguageIndex].code;
-        
-        // Handle speech recognition results
-        recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript.trim();
-            const confidence = event.results[0][0].confidence;
-            
-            console.log(`Speech recognized (${recognition.lang}): ${transcript} (Confidence: ${confidence})`);
-            
-            // If confidence is too low, it might be the wrong language
-            if (confidence < 0.5 && currentLanguageIndex < supportedLanguages.length - 1) {
-                // Try next language
-                currentLanguageIndex++;
-                recognition.lang = supportedLanguages[currentLanguageIndex].code;
-                showTemporaryMessage(`Versuche ${supportedLanguages[currentLanguageIndex].name}...`, "processing");
-                
-                if (isListening && !processingAudio) {
-                    setTimeout(() => recognition.start(), 300);
-                }
-                return;
-            }
-            
-            // Show the recognized text temporarily
-            showTemporaryMessage(`Erkannt (${supportedLanguages[currentLanguageIndex].name}): "${transcript}"`, "processing");
-            
-            // Reset language index for next recognition
-            currentLanguageIndex = 0;
-            recognition.lang = supportedLanguages[currentLanguageIndex].code;
-            
-            // Process the speech using WebSocket
-            processSpeechWithWebSocket(transcript, recognition.lang);
-        };
-        
-        // Handle speech recognition errors
-        recognition.onerror = (event) => {
-            console.error('Speech recognition error', event.error, 'in language', recognition.lang);
-            
-            if (event.error === 'no-speech') {
-                // If no speech was detected for the current language, try another language
-                if (currentLanguageIndex < supportedLanguages.length - 1) {
-                    currentLanguageIndex++;
-                    recognition.lang = supportedLanguages[currentLanguageIndex].code;
-                    console.log(`Trying next language: ${recognition.lang}`);
-                    
-                    if (isListening && autoRestart && !processingAudio) {
-                        setTimeout(() => recognition.start(), 300);
-                    }
-                } else {
-                    // We've tried all languages, reset and show message
-                    currentLanguageIndex = 0;
-                    recognition.lang = supportedLanguages[currentLanguageIndex].code;
-                    showTemporaryMessage("Keine Sprache erkannt. Bitte sprechen Sie.", "error");
-                    
-                    if (isListening && autoRestart && !processingAudio) {
-                        setTimeout(() => recognition.start(), 300);
-                    }
-                }
-            } else if (event.error === 'language-not-supported') {
-                // If the language is not supported, try the next one
-                if (currentLanguageIndex < supportedLanguages.length - 1) {
-                    currentLanguageIndex++;
-                    recognition.lang = supportedLanguages[currentLanguageIndex].code;
-                    console.log(`Language not supported, trying: ${recognition.lang}`);
-                    
-                    if (isListening && autoRestart && !processingAudio) {
-                        setTimeout(() => recognition.start(), 300);
-                    }
-                }
-            } else {
-                // For other errors
-                statusText.textContent = `Fehler: ${event.error}`;
-                if (isListening && autoRestart && !processingAudio) {
-                    setTimeout(() => recognition.start(), 1000);
-                }
-            }
-        };
-        
-        // Handle end of speech recognition
-        recognition.onend = () => {
-            console.log('Speech recognition ended');
-            
-            // If we're still in listening mode and not processing audio, restart
-            if (isListening && autoRestart && !processingAudio) {
-                setTimeout(() => recognition.start(), 300);
-            }
-        };
-    } else {
-        console.error('Speech Recognition API not supported in this browser');
-        statusText.textContent = 'Spracherkennung wird in diesem Browser nicht unterstützt.';
-        if (micButton) {
-            micButton.disabled = true;
-        }
-    }
-    
     // Function to start recording audio for Whisper API
-    async function startWhisperRecording() {
+    async function startRecording() {
         if (processingAudio) return;
         
         try {
-            // Reset audio chunks
+            // Reset audio chunks and voice detection state
             audioChunks = [];
+            voiceDetected = false;
+            silenceDuration = 0;
+            audioBufferCache = [];
+            
+            // Initialize audio context if not already created
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000 // Optimal for speech recognition
+                });
+            }
             
             // Get microphone access if needed
             if (!mediaRecorder) {
+                // Get microphone stream with enhanced noise cancellation settings
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
                         autoGainControl: true,
-                        sampleRate: 16000
+                        channelCount: 1, // Mono for better noise handling
                     } 
                 });
                 
-                // Create media recorder with optimized settings for Whisper
+                // Create audio processing nodes for advanced noise cancellation
+                const microphoneSource = audioContext.createMediaStreamSource(stream);
+                
+                // Create analyzer for voice activity detection
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048; // Larger FFT for better frequency resolution
+                analyser.smoothingTimeConstant = 0.6; // Less smoothing to respond faster to speech
+                
+                // Create filters to focus on speech frequencies
+                
+                // 1. High-pass filter to eliminate low rumble/background noise
+                const highPassFilter = audioContext.createBiquadFilter();
+                highPassFilter.type = 'highpass';
+                highPassFilter.frequency.value = 150; // Cut frequencies below 150Hz
+                highPassFilter.Q.value = 0.5;
+                
+                // 2. Low-pass filter to eliminate high-frequency hiss
+                const lowPassFilter = audioContext.createBiquadFilter();
+                lowPassFilter.type = 'lowpass';
+                lowPassFilter.frequency.value = 6000; // Cut frequencies above 6kHz
+                lowPassFilter.Q.value = 0.5;
+                
+                // 3. Create a dynamics compressor to even out audio levels
+                const compressor = audioContext.createDynamicsCompressor();
+                compressor.threshold.value = -30;
+                compressor.knee.value = 10;
+                compressor.ratio.value = 12;
+                compressor.attack.value = 0.005;
+                compressor.release.value = 0.250;
+                
+                // Create destination node for processed audio
+                const outputDestination = audioContext.createMediaStreamDestination();
+                
+                // Connect the audio processing chain
+                microphoneSource.connect(highPassFilter);
+                highPassFilter.connect(lowPassFilter);
+                lowPassFilter.connect(compressor);
+                compressor.connect(outputDestination);
+                
+                // Connect analyzer at the end to monitor processed audio
+                compressor.connect(analyser);
+                
+                // Create media recorder with optimized settings using the processed audio stream
                 const options = {
                     mimeType: 'audio/webm',
                     audioBitsPerSecond: 128000
                 };
                 
-                mediaRecorder = new MediaRecorder(stream, options);
+                mediaRecorder = new MediaRecorder(outputDestination.stream, options);
                 
                 // Handle data available event
                 mediaRecorder.ondataavailable = (event) => {
@@ -291,6 +241,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Handle recording stop event
                 mediaRecorder.onstop = async () => {
                     if (!isListening || audioChunks.length === 0) return;
+                    
+                    // Stop the voice detection timer
+                    if (silenceTimer) {
+                        clearInterval(silenceTimer);
+                        silenceTimer = null;
+                    }
                     
                     processingAudio = true;
                     showTemporaryMessage(`Processing audio in ${supportedLanguages[currentLanguageIndex].name}...`, "processing");
@@ -316,6 +272,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         } else {
                             showTemporaryMessage("No connection to server.", "error");
                             processingAudio = false;
+                            
+                            // Restart recording if still listening
+                            if (isListening && autoRestart) {
+                                setTimeout(startRecording, 1000);
+                            }
                         }
                     } catch (error) {
                         console.error("Error processing recording:", error);
@@ -324,43 +285,193 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         // Restart recording if still listening
                         if (isListening && autoRestart) {
-                            setTimeout(startWhisperRecording, 1000);
+                            setTimeout(startRecording, 1000);
                         }
                     }
                 };
             }
             
-            // Set up recording duration with a more flexible approach
-            const minRecordingDuration = 3000; // Minimum 3 seconds
-            const maxRecordingDuration = 8000; // Maximum 8 seconds
-            const defaultRecordingDuration = 6000; // Default 6 seconds
-            
-            // Get recording duration from user preference or use default
-            const recordingDuration = localStorage.getItem('whisperRecordingDuration') || defaultRecordingDuration;
-            
             // Start recording
-            mediaRecorder.start();
+            mediaRecorder.start(1000); // Collect data in 1-second chunks
             
-            // Show recording indicator with countdown and language
+            // Show recording indicator with language
             const currentLang = supportedLanguages[currentLanguageIndex].name;
-            showTemporaryMessage(`Recording (${Math.round(recordingDuration/1000)}s)... [${currentLang}]`, "processing");
+            showTemporaryMessage(`Recording... [${currentLang}]`, "processing");
             
-            // Stop recording after duration
+            // Start voice detection to determine when to stop recording
+            startVoiceDetection();
+            
+            // Set a maximum recording duration as a fallback
             setTimeout(() => {
                 if (mediaRecorder && mediaRecorder.state === "recording") {
                     mediaRecorder.stop();
                 }
-            }, recordingDuration);
+            }, maxRecordingDuration);
             
         } catch (error) {
             console.error("Error accessing microphone:", error);
             showTemporaryMessage(`Mikrofonfehler: ${error.message}`, "error");
+        }
+    }
+    
+    // Function to detect voice activity and control recording duration
+    function startVoiceDetection() {
+        if (!analyser) return;
+        
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        let lastVoiceTime = Date.now();
+        let speechConsistencyCounter = 0;
+        let speechDetectionStarted = false;
+        
+        // Function to check if the current audio frame contains speech
+        function detectSpeech(audioData, bufferLength) {
+            // Calculate energy in different frequency bands with a focus on speech frequencies
+            const speechBandStart = Math.floor(300 * bufferLength / audioContext.sampleRate);
+            const speechBandEnd = Math.floor(3500 * bufferLength / audioContext.sampleRate);
             
-            // Fall back to Web Speech API if available
-            if (!useWhisper && recognition && isListening) {
-                recognition.start();
+            // Calculate energy in speech band
+            let speechBandEnergy = 0;
+            for (let i = speechBandStart; i < speechBandEnd; i++) {
+                speechBandEnergy += audioData[i];
+            }
+            speechBandEnergy /= (speechBandEnd - speechBandStart);
+            
+            // Calculate energy outside speech band (noise)
+            let noiseBandEnergy = 0;
+            let noiseCount = 0;
+            
+            // Low frequency noise
+            for (let i = 0; i < speechBandStart; i++) {
+                noiseBandEnergy += audioData[i];
+                noiseCount++;
+            }
+            
+            // High frequency noise
+            for (let i = speechBandEnd; i < bufferLength; i++) {
+                noiseBandEnergy += audioData[i];
+                noiseCount++;
+            }
+            
+            noiseBandEnergy = noiseCount > 0 ? noiseBandEnergy / noiseCount : 0;
+            
+            // Calculate signal-to-noise ratio (higher is better)
+            const snr = speechBandEnergy / (noiseBandEnergy + 0.1); // Avoid division by zero
+            
+            // Convert main signal to dB
+            const dBLevel = 20 * Math.log10(speechBandEnergy / 255);
+            
+            // Store value to calculate variance
+            audioBufferCache.push(dBLevel);
+            if (audioBufferCache.length > 10) audioBufferCache.shift(); // Keep last 10 readings
+            
+            // Calculate variance of audio levels (speech has more variance than steady noise)
+            let sum = 0, mean = 0, variance = 0;
+            
+            // Only calculate variance if we have enough samples
+            if (audioBufferCache.length > 3) {
+                for (let i = 0; i < audioBufferCache.length; i++) {
+                    sum += audioBufferCache[i];
+                }
+                mean = sum / audioBufferCache.length;
+                
+                for (let i = 0; i < audioBufferCache.length; i++) {
+                    variance += Math.pow(audioBufferCache[i] - mean, 2);
+                }
+                variance /= audioBufferCache.length;
+            }
+            
+            // Apply multiple criteria to detect speech
+            const hasSignificantVolume = dBLevel > silenceThreshold;
+            const hasGoodSNR = snr > 1.8; // Speech should be stronger than background
+            const hasVariance = variance > 3; // Speech has more variance than steady noise
+            
+            return {
+                isVoice: hasSignificantVolume && (hasGoodSNR || hasVariance),
+                dBLevel: dBLevel
+            };
+        }
+        
+        // Update the status text with the silence countdown when relevant
+        function updateStatusWithSilence() {
+            if (silenceDuration > 0 && voiceDetected) {
+                const remainingTime = Math.max(0, Math.round((silenceStopDuration - silenceDuration) / 1000));
+                const currentLang = supportedLanguages[currentLanguageIndex].name;
+                statusText.textContent = `Recording... [${currentLang}] (stops in ${remainingTime}s of silence)`;
             }
         }
+        
+        // Clear any existing voice detection timer
+        if (silenceTimer) {
+            clearInterval(silenceTimer);
+        }
+        
+        // Start a new timer to periodically check voice activity
+        silenceTimer = setInterval(() => {
+            if (!isListening || !mediaRecorder || mediaRecorder.state !== "recording") {
+                clearInterval(silenceTimer);
+                silenceTimer = null;
+                return;
+            }
+            
+            // Get the current audio data
+            analyser.getByteFrequencyData(dataArray);
+            
+            // Apply speech detection
+            const speechResult = detectSpeech(dataArray, bufferLength);
+            const isVoice = speechResult.isVoice;
+            
+            // Implement speech consistency check to avoid false positives
+            if (isVoice) {
+                speechConsistencyCounter++;
+                // Only register true speech after several consecutive detections
+                if (speechConsistencyCounter >= speechConsistencyThreshold && !speechDetectionStarted) {
+                    speechDetectionStarted = true;
+                }
+            } else {
+                // Reset counter if speech wasn't detected
+                speechConsistencyCounter = Math.max(0, speechConsistencyCounter - 1);
+                if (speechConsistencyCounter === 0) {
+                    speechDetectionStarted = false;
+                }
+            }
+            
+            // Visual indication of voice detection
+            if (isVoice && speechDetectionStarted) {
+                if (pulseRing) {
+                    pulseRing.style.transform = "scale(1.2)";
+                    pulseRing.style.backgroundColor = "rgba(0, 255, 0, 0.3)";
+                }
+            } else {
+                if (pulseRing) {
+                    pulseRing.style.transform = "";
+                    pulseRing.style.backgroundColor = "";
+                }
+            }
+            
+            if (isVoice && speechDetectionStarted) {
+                // Voice detected
+                voiceDetected = true;
+                lastVoiceTime = Date.now();
+                silenceDuration = 0;
+            } else {
+                // Check how long we've had silence
+                silenceDuration = Date.now() - lastVoiceTime;
+                
+                // Update the status with silence countdown
+                updateStatusWithSilence();
+                
+                // If we've had enough silence after voice was detected, stop recording
+                if (voiceDetected && silenceDuration >= silenceStopDuration) {
+                    clearInterval(silenceTimer);
+                    silenceTimer = null;
+                    
+                    if (mediaRecorder && mediaRecorder.state === "recording") {
+                        mediaRecorder.stop();
+                    }
+                }
+            }
+        }, 100);
     }
     
     // Helper function to convert blob to base64
@@ -377,26 +488,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Process speech with WebSocket
-    function processSpeechWithWebSocket(text, sourceLanguage) {
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-            showTemporaryMessage('Keine Verbindung zum Server.', "error");
-            return;
-        }
-        
-        processingAudio = true;
-        
-        // Extract language code without region
-        const languageCode = sourceLanguage.split('-')[0];
-        
-        // Send to the server for translation and TTS
-        socket.send(JSON.stringify({
-            action: 'process_speech',
-            text: text,
-            language: languageCode
-        }));
-    }
-    
     // Update the UI based on the listening state
     function updateUI(listening) {
         isListening = listening;
@@ -405,12 +496,6 @@ document.addEventListener('DOMContentLoaded', function() {
             micButton.classList.add('active');
             pulseRing.classList.add('active');
             statusText.textContent = 'Zuhören... Sprechen Sie bitte.';
-            
-            // Reset language index when starting fresh
-            currentLanguageIndex = 0;
-            if (!useWhisper && recognition) {
-                recognition.lang = supportedLanguages[currentLanguageIndex].code;
-            }
         } else {
             micButton.classList.remove('active');
             pulseRing.classList.remove('active');
@@ -448,24 +533,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Start speech recognition
     function startListening() {
-        if (useWhisper) {
-            // Using Whisper API
-            startWhisperRecording();
-        } else if (recognition) {
-            // Using Web Speech API
-            try {
-                // Use the currently selected language
-                recognition.lang = supportedLanguages[currentLanguageIndex].code;
-                recognition.start();
-            } catch (error) {
-                console.error('Error starting speech recognition:', error);
-                statusText.textContent = `Fehler: ${error.message}`;
-                return;
-            }
-        } else {
-            statusText.textContent = 'Spracherkennung wird nicht unterstützt.';
-            return;
-        }
+        startRecording();
         
         if (!socket || socket.readyState !== WebSocket.OPEN) {
             showTemporaryMessage('Keine Verbindung zum Server.', "error");
@@ -474,11 +542,6 @@ document.addEventListener('DOMContentLoaded', function() {
         
         autoRestart = true;
         processingAudio = false;
-        
-        // Do NOT reset the language index here - keep the user's selection
-        if (!useWhisper && recognition) {
-            recognition.lang = supportedLanguages[currentLanguageIndex].code;
-        }
         
         updateUI(true);
         
@@ -495,18 +558,15 @@ document.addEventListener('DOMContentLoaded', function() {
         autoRestart = false;
         processingAudio = false;
         
-        if (useWhisper) {
-            // Stop whisper recording
-            if (mediaRecorder && mediaRecorder.state === "recording") {
-                mediaRecorder.stop();
-            }
-        } else if (recognition) {
-            // Stop Web Speech API
-            try {
-                recognition.stop();
-            } catch (error) {
-                console.error('Error stopping speech recognition:', error);
-            }
+        // Stop voice detection
+        if (silenceTimer) {
+            clearInterval(silenceTimer);
+            silenceTimer = null;
+        }
+        
+        // Stop recording
+        if (mediaRecorder && mediaRecorder.state === "recording") {
+            mediaRecorder.stop();
         }
         
         updateUI(false);
