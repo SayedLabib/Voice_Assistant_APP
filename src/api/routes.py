@@ -5,31 +5,29 @@ import json
 import os
 from dotenv import load_dotenv
 from services.stt_service import STTService
-from services.tts_service import TTSService
 from services.whisper_stt_service import WhisperSTTService
+import asyncio
 
 # Load environment variables
 load_dotenv()
-USE_WHISPER = os.getenv("USE_WHISPER", "false").lower() == "true"
+USE_WHISPER = os.getenv("USE_WHISPER", "true").lower() == "true"  # Default to using Whisper
 
 router = APIRouter()
 
 # Initialize services
 stt_service = STTService()
-tts_service = TTSService(language=os.getenv("TTS_LANGUAGE", "de"))
 whisper_stt_service = WhisperSTTService() if USE_WHISPER else None
 
 # Pydantic models for request validation
-class TextToSpeechRequest(BaseModel):
-    text: str
-
 class SpeechToTextRequest(BaseModel):
     text: str
     source_language: str = "auto"
+    target_language: str = "de"  # Default to German
 
 class AudioToTextRequest(BaseModel):
     audio_data: str  # Base64 encoded audio data
     language: str = "auto"
+    target_language: str = "de"  # Default to German
 
 # Active WebSocket connections
 active_connections = {}
@@ -50,23 +48,46 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Get the recognized text from the client
                 text = message.get("text", "")
                 source_lang = message.get("language", "auto")
+                # Always translate to German
+                target_lang = "de"
                 
                 if not text:
                     continue
                 
                 try:
-                    # Translate to German
-                    german_text = await stt_service.recognize(text, source_lang)
-                    
-                    # Convert German text to speech
-                    audio_data = await tts_service.convert(german_text)
+                    # Translate the text to German
+                    translated_text = await stt_service.recognize(text, source_lang, target_lang)
                     
                     # Send the processed data back to the client
                     await websocket.send_json({
                         "type": "processed_speech",
                         "original_text": text,
-                        "translated_text": german_text,
-                        "audio_data": audio_data
+                        "translated_text": translated_text,
+                        "detected_language": source_lang
+                    })
+                except Exception as e:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": str(e)
+                    })
+            
+            # New action handler for direct text translation requests from the browser's Web Speech API
+            elif message.get("action") == "translate_text":
+                text = message.get("text", "")
+                source_lang = message.get("source_language", "auto")
+                target_lang = message.get("target_language", "de")  # Default to German
+                
+                if not text:
+                    continue
+                
+                try:
+                    # Translate the text to German
+                    translated_text = await stt_service.recognize(text, source_lang, target_lang)
+                    
+                    # Send only the translation back to the client
+                    await websocket.send_json({
+                        "type": "translation_only",
+                        "translated_text": translated_text
                     })
                 except Exception as e:
                     await websocket.send_json({
@@ -75,46 +96,64 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
             
             elif message.get("action") == "process_audio" and whisper_stt_service:
-                # Whisper-based speech recognition
+                # Whisper-based speech recognition optimized for live transcription
                 audio_data = message.get("audio_data", "")
                 source_lang = message.get("language", "auto")
+                target_lang = "de"  # Always translate to German
                 
                 if not audio_data:
                     continue
                 
-                try:                    
-                    # Transcribe audio using Whisper
-                    result = await whisper_stt_service.transcribe_audio(audio_data, source_lang)
+                try:
+                    # Create background tasks for transcription and translation
+                    transcription_task = asyncio.create_task(
+                        whisper_stt_service.transcribe_audio(audio_data, source_lang)
+                    )
+                    
+                    # Get transcription result
+                    result = await transcription_task
                     text = result.get("text", "")
                     detected_language = result.get("detected_language", source_lang)
                     
                     # Skip processing if transcription failed
-                    if not text or text.startswith("API Error") or text.startswith("Transcription error"):
+                    if not text:
+                        continue
+                    
+                    if text.startswith("API Error") or text.startswith("Transcription error"):
                         await websocket.send_json({
                             "type": "error",
                             "message": text
                         })
                         continue
                     
-                    # Translate to German if needed
-                    german_text = await stt_service.recognize(text, detected_language)
+                    # Start translation in parallel for efficiency
+                    translation_task = asyncio.create_task(
+                        stt_service.recognize(text, detected_language, target_lang)
+                    )
                     
-                    if not german_text:
+                    # Send intermediate response immediately with just the original text
+                    # This provides instant feedback to the user while translation is in progress
+                    await websocket.send_json({
+                        "type": "interim_speech",
+                        "original_text": text,
+                        "detected_language": detected_language
+                    })
+                    
+                    # Now wait for translation to complete
+                    translated_text = await translation_task
+                    
+                    if not translated_text:
                         await websocket.send_json({
                             "type": "error",
                             "message": "Translation returned empty result"
                         })
                         continue
                     
-                    # Convert German text to speech
-                    audio_data = await tts_service.convert(german_text)
-                    
-                    # Send the processed data back to the client
+                    # Send the final processed data back to the client
                     await websocket.send_json({
                         "type": "processed_speech",
                         "original_text": text,
-                        "translated_text": german_text,
-                        "audio_data": audio_data,
+                        "translated_text": translated_text,
                         "detected_language": detected_language
                     })
                 except Exception as e:
@@ -128,25 +167,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "error",
                     "message": "Whisper service is not enabled. Set USE_WHISPER=true in .env file."
                 })
-            
-            elif message.get("action") == "tts":
-                # Text-to-speech request
-                text = message.get("text", "")
-                if not text:
-                    continue
-                
-                try:
-                    audio_data = await tts_service.convert(text)
-                    await websocket.send_json({
-                        "type": "audio",
-                        "text": text,
-                        "audio_data": audio_data
-                    })
-                except Exception as e:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": str(e)
-                    })
     
     except WebSocketDisconnect:
         if client_id in active_connections:
@@ -175,22 +195,25 @@ async def transcribe_audio(request: AudioToTextRequest):
         )
     
     try:
+        # Always translate to German
+        target_lang = "de"
+        
         result = await whisper_stt_service.transcribe_audio(
             request.audio_data, request.language
         )
-        return {"success": True, "text": result.get("text", ""), "detected_language": result.get("detected_language", "unknown")}
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
-@router.post("/tts", response_model=dict)
-async def text_to_speech(request: TextToSpeechRequest):
-    """Fallback HTTP endpoint for text-to-speech"""
-    try:
-        audio_data = await tts_service.convert(request.text)
-        return {"success": True, "audio_data": audio_data}
+        
+        text = result.get("text", "")
+        detected_language = result.get("detected_language", request.language)
+        
+        # Translate to German
+        translated_text = await stt_service.recognize(text, detected_language, target_lang)
+        
+        return {
+            "success": True, 
+            "text": text, 
+            "translated_text": translated_text,
+            "detected_language": detected_language
+        }
     except Exception as e:
         return JSONResponse(
             status_code=500,

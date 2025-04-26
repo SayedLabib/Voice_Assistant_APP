@@ -1,8 +1,8 @@
-from gtts import gTTS
+import pyttsx3
 from io import BytesIO
 import base64
-import requests
-import json
+import os
+import tempfile
 import os
 import tempfile
 

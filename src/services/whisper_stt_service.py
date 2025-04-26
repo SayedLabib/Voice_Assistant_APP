@@ -26,12 +26,14 @@ LANGUAGE_CODES = {
 class WhisperSTTService:
     """
     Speech-to-text service using Groq's API with whisper-large-v3-turbo model
-    for enhanced accuracy and multilingual support.
+    for enhanced accuracy and multilingual support with optimizations for live transcription.
     """
     
     def __init__(self):
         self.api_key = GROQ_API_KEY
         self.api_url = "https://api.groq.com/openai/v1/audio/transcriptions"
+        self.last_transcription = ""
+        self.confidence_threshold = 0.6  # Minimum confidence score to accept transcription
         
         if not self.api_key:
             print("WARNING: GROQ_API_KEY not found in environment variables. Whisper service will not work correctly.")
@@ -88,9 +90,11 @@ class WhisperSTTService:
             if language != "auto" and whisper_language:
                 form_data.add_field('language', whisper_language)
             
-            # Add additional parameters for better performance
+            # Add parameters optimized for real-time transcription
             form_data.add_field('response_format', 'json')
             form_data.add_field('temperature', '0.0')
+            # Enable faster processing for real-time transcription
+            form_data.add_field('prompt', self.last_transcription) # Context from previous transcription
             
             # Send the request to the Groq API
             async with aiohttp.ClientSession() as session:
@@ -98,13 +102,22 @@ class WhisperSTTService:
                     self.api_url,
                     headers=headers,
                     data=form_data,
-                    timeout=30
+                    timeout=10  # Reduced timeout for faster response
                 ) as response:
                     if response.status == 200:
                         result = await response.json()
+                        transcribed_text = result.get('text', '').strip()
+                        detected_lang = result.get('language', language or 'unknown')
+                        
+                        # Update the last transcription for context in future requests
+                        # Only store the last few words to provide context without biasing new transcriptions
+                        if transcribed_text:
+                            words = transcribed_text.split()
+                            self.last_transcription = " ".join(words[-10:]) if len(words) > 10 else transcribed_text
+                        
                         return {
-                            "text": result.get('text', ''),
-                            "detected_language": result.get('language', language or 'unknown')
+                            "text": transcribed_text,
+                            "detected_language": detected_lang
                         }
                     else:
                         error_text = await response.text()
@@ -128,9 +141,12 @@ class WhisperSTTService:
     
     async def transcribe_live_audio(self, audio_chunks, language=None):
         """
-        Process a stream of audio chunks for near-real-time transcription
+        Process a stream of audio chunks for real-time transcription
+        Optimized for low-latency processing
         """
+        # Convert the audio chunks to a single blob
         combined_audio = b''.join(audio_chunks)
         base64_audio = base64.b64encode(combined_audio).decode('utf-8')
         
-        return await self.transcribe_audio(base64_audio, language)
+        result = await self.transcribe_audio(base64_audio, language)
+        return result
