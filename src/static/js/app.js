@@ -20,6 +20,13 @@ document.addEventListener("DOMContentLoaded", function () {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const hasSpeechRecognition = !!SpeechRecognition;
   
+  // Debug mode for troubleshooting
+  const DEBUG = true;
+  
+  function debugLog(...args) {
+    if (DEBUG) console.log(...args);
+  }
+  
   // Create recognition instance
   let recognition = null;
   
@@ -93,7 +100,30 @@ document.addEventListener("DOMContentLoaded", function () {
     { code: "ru", name: "Russian" },
   ];
 
+  function checkBrowserCompatibility() {
+    const browserInfo = {
+      isChrome: /Chrome/.test(navigator.userAgent) && !/Edge/.test(navigator.userAgent),
+      isEdge: /Edg/.test(navigator.userAgent),
+      isFirefox: /Firefox/.test(navigator.userAgent),
+      isSafari: /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent),
+      isOpera: /OPR/.test(navigator.userAgent)
+    };
+    
+    debugLog("Browser detection:", browserInfo);
+    
+    // Show warning for browsers with limited speech recognition support
+    if (!(browserInfo.isChrome || browserInfo.isEdge || browserInfo.isSafari)) {
+      const browserNotice = document.getElementById("browser-support-notice");
+      if (browserNotice) {
+        browserNotice.classList.remove("hidden");
+      }
+    }
+    
+    return browserInfo;
+  }
+
   // Initialize the app
+  const browserInfo = checkBrowserCompatibility();
   initializeLanguageSelectors();
   initializeWebSocket();
   initializeUI();
@@ -499,6 +529,9 @@ document.addEventListener("DOMContentLoaded", function () {
         if (state.sessionTranscript && !state.sessionTranscript.endsWith(' ') && !finalTranscript.startsWith(' ')) {
           state.sessionTranscript += ' ';
         }
+        
+        // Store previous length to know what's new
+        const previousLength = state.sessionTranscript.length;
         state.sessionTranscript += finalTranscript;
         
         // Update the display with the full session transcript plus any interim text
@@ -507,13 +540,13 @@ document.addEventListener("DOMContentLoaded", function () {
         // Save the current recognized text (session + interim)
         state.recognizedText = state.sessionTranscript;
         
-        // Send the latest complete segment for translation
-        sendForTranslation(finalTranscript);
+        // Send ONLY the new segment for translation
+        sendForTranslation(finalTranscript, true);
       } else {
         // Original behavior - just use the current final transcript
         updateTranscriptText(finalTranscript, true);
         state.recognizedText = finalTranscript;
-        sendForTranslation(finalTranscript);
+        sendForTranslation(finalTranscript, false);
       }
     }
     
@@ -667,6 +700,10 @@ document.addEventListener("DOMContentLoaded", function () {
     // Create new connection
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+    
+    // Add debugging for WebSocket connection issues
+    debugLog("Attempting to connect to WebSocket:", wsUrl);
+    
     socket = new WebSocket(wsUrl);
 
     // Setup event handlers
@@ -677,6 +714,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function handleSocketOpen() {
+    debugLog("WebSocket connection established successfully");
     if (hasSpeechRecognition) {
       statusText.textContent = "Connected. Click the mic button to start recording...";
       statusText.className = "";
@@ -687,10 +725,11 @@ document.addEventListener("DOMContentLoaded", function () {
   async function handleSocketMessage(event) {
     try {
       const data = JSON.parse(event.data);
+      debugLog("Received WebSocket message:", data);
 
       if (data.type === "translation_only") {
         // Handle just the translation part
-        updateTranslation(data.translated_text);
+        updateTranslation(data.translated_text, data.is_incremental);
       } else if (data.type === "error") {
         showTemporaryMessage(`Error: ${data.message}`, "error");
       }
@@ -700,11 +739,13 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function handleSocketClose(event) {
+    debugLog("WebSocket connection closed:", event);
     showTemporaryMessage("Connection to server lost. Translation will not work.", "error");
     setTimeout(initializeWebSocket, 3000);
   }
 
-  function handleSocketError() {
+  function handleSocketError(event) {
+    debugLog("WebSocket connection error:", event);
     showTemporaryMessage("Connection error occurred.", "error");
   }
 
@@ -716,19 +757,57 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
+    // Check WebSocket connection before proceeding
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      showTemporaryMessage("No connection to translation server.", "error");
+      debugLog("WebSocket not connected, attempting to reconnect...");
+      showTemporaryMessage("Connection to translation server lost. Attempting to reconnect...", "warning");
+      initializeWebSocket();
+      // Wait briefly to see if connection establishes
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        showTemporaryMessage("No connection to translation server. Translation may not work properly.", "error");
+      }
+    }
+
+    // CRITICAL FIX: Check for microphone permission first
+    // This is the key part to fix the microphone button activation issue
+    try {
+      debugLog("Requesting microphone permission explicitly");
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      // Keep the stream active briefly to ensure the system recognizes it's being used
+      // This helps prevent "audio-capture" errors on some systems
+      setTimeout(() => {
+        // Stop the stream after a short delay
+        stream.getTracks().forEach(track => track.stop());
+        debugLog("Microphone permission explicitly granted and stream stopped");
+      }, 500);
+      
+      debugLog("Microphone permission granted");
+    } catch (err) {
+      debugLog("Microphone permission error:", err);
+      showTemporaryMessage("Microphone access denied. Please allow microphone access in browser settings.", "error");
+      updateUI(false);
+      return;
     }
 
     try {
+      // Reset state variables
       state.pendingTranslation = false;
       state.recognizedText = "";
-      state.sessionTranscript = ""; // Reset session transcript
+      state.sessionTranscript = ""; 
       state.interimText = "";
       state.finalTranscriptSent = false;
       state.recognitionRestartAttempts = 0;
       state.errorRecoveryMode = false;
       
+      // Clear any existing timers
       if (state.inactivityTimer) {
         clearTimeout(state.inactivityTimer);
         state.inactivityTimer = null;
@@ -746,38 +825,349 @@ document.addEventListener("DOMContentLoaded", function () {
       // Update UI first for instant feedback
       updateUI(true);
 
-      // Always initialize a fresh recognition instance when starting
-      initializeSpeechRecognition();
-      
-      // Start browser-based speech recognition for instant transcription
-      try {
-        recognition.start();
-      } catch (e) {
-        console.error("Could not start recognition:", e);
-        // If we can't start, try re-initializing once
-        setTimeout(() => {
-          try {
-            initializeSpeechRecognition();
-            recognition.start();
-          } catch (e2) {
-            console.error("Second attempt failed:", e2);
-            
-            // Check for specific error types
-            if (e2.name === "NotAllowedError") {
-              showTemporaryMessage("Microphone permission denied. Please allow microphone access in your browser settings.", "error");
-            } else {
-              showTemporaryMessage("Could not start speech recognition.", "error");
-            }
-            
-            updateUI(false);
-          }
-        }, 100);
+      // NEW APPROACH: Create brand new speech recognition instance each time
+      if (recognition) {
+        try {
+          // First clean up any existing instance completely
+          recognition.onresult = null;
+          recognition.onend = null;
+          recognition.onerror = null;
+          recognition.onstart = null;
+          recognition.onspeechstart = null;
+          recognition.onspeechend = null;
+          recognition.abort();
+          recognition = null;
+          debugLog("Successfully cleaned up previous recognition instance");
+        } catch (e) {
+          debugLog("Error cleaning up previous recognition:", e);
+        }
       }
+      
+      // Create completely fresh recognition instance
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      recognition.lang = supportedLanguages[state.currentLanguageIndex].code;
+      
+      // Set up all event handlers again
+      setupRecognitionEventHandlers();
+      
+      // Start speech recognition with a small delay after UI updates
+      // This helps prevent timing issues
+      setTimeout(() => {
+        try {
+          debugLog("Starting speech recognition");
+          recognition.start();
+          debugLog("Speech recognition started successfully");
+        } catch (e) {
+          debugLog("Error starting recognition:", e);
+          
+          // If we can't start, try re-initializing after a short delay
+          setTimeout(() => {
+            try {
+              debugLog("Reinitializing speech recognition completely");
+              recognition = new SpeechRecognition();
+              recognition.continuous = true;
+              recognition.interimResults = true;
+              recognition.maxAlternatives = 1;
+              recognition.lang = supportedLanguages[state.currentLanguageIndex].code;
+              
+              setupRecognitionEventHandlers();
+              recognition.start();
+              debugLog("Recognition restarted successfully after reinitializing");
+            } catch (e2) {
+              debugLog("Second attempt failed:", e2);
+              
+              // Check for specific error types
+              if (e2.name === "NotAllowedError") {
+                showTemporaryMessage("Microphone permission denied. Please allow microphone access in browser settings.", "error");
+              } else {
+                showTemporaryMessage("Could not start speech recognition. Try reloading the page.", "error");
+              }
+              
+              updateUI(false);
+            }
+          }, 300);
+        }
+      }, 100);
     } catch (error) {
-      console.error("Error starting listening:", error);
+      debugLog("Error in startListening:", error);
       showTemporaryMessage(`Error: ${error.message}`, "error");
       updateUI(false);
     }
+  }
+  
+  // New helper function to set up all recognition event handlers
+  function setupRecognitionEventHandlers() {
+    if (!recognition) return;
+    
+    // Basic events
+    recognition.onstart = () => {
+      debugLog("Speech recognition started");
+      state.isTranscribing = true;
+      state.recognitionRestartAttempts = 0;
+      state.lastSpeechTime = Date.now();
+      state.errorRecoveryMode = false;
+      
+      // Show visual feedback that we're listening
+      if (document.querySelector('.recognition-indicator')) {
+        document.querySelector('.indicator-dot').classList.add('active');
+        document.querySelector('.indicator-text').textContent = 'Listening...';
+      }
+      
+      // Remove placeholder if present
+      const placeholder = originalTextElement.querySelector('.placeholder');
+      if (placeholder) {
+        placeholder.remove();
+      }
+      
+      // Set up long-running session management
+      if (state.continuousTimer) clearTimeout(state.continuousTimer);
+      state.continuousTimer = setTimeout(() => {
+        debugLog("Resetting recognition after long continuous session");
+        if (state.isListening) {
+          try {
+            // Stop and restart to get a fresh recognition session
+            recognition.stop();
+            setTimeout(() => {
+              if (state.isListening) {
+                startListening();
+              }
+            }, 300);
+          } catch (e) {
+            debugLog("Error during long-running session reset:", e);
+          }
+        }
+      }, config.speech.maxContinuousListeningTime);
+      
+      // Add the pulsing speech indicator to the UI
+      updateSpeechActivity(false);
+    };
+    
+    // Audio events
+    recognition.onaudiostart = () => {
+      debugLog("Audio capturing started");
+      showTemporaryMessage("Audio capturing started", "info", true);
+    };
+    
+    recognition.onsoundstart = () => {
+      debugLog("Sound detected");
+      updateSpeechActivity(true);
+    };
+    
+    recognition.onsoundend = () => {
+      debugLog("Sound has stopped");
+      updateSpeechActivity(false);
+    };
+    
+    recognition.onspeechstart = () => {
+      debugLog("Speech started");
+      showTemporaryMessage("Speech detected", "info", true);
+      updateSpeechActivity(true);
+    };
+    
+    recognition.onspeechend = () => {
+      debugLog("Speech ended");
+      updateSpeechActivity(false);
+    };
+    
+    recognition.onnomatch = () => {
+      debugLog("No match found");
+      showTemporaryMessage("Could not recognize speech", "warning", true);
+    };
+    
+    // Error handling
+    recognition.onerror = (event) => {
+      const errorMessage = getErrorMessage(event.error);
+      debugLog("Recognition error:", event.error, errorMessage);
+      
+      // Reset recovery flag to ensure we try to recover
+      state.errorRecoveryMode = true;
+      state.lastError = event.error;
+      
+      showTemporaryMessage(`${errorMessage}`, "error");
+      
+      // Handle different error types according to spec
+      switch(event.error) {
+        case "no-speech":
+          // No speech was detected - could reset after a timeout
+          setTimeout(() => {
+            if (state.isListening) {
+              try { recognition.start(); } catch(e) { /* suppress */ }
+            }
+          }, config.speech.errorResetDelay);
+          break;
+          
+        case "audio-capture":
+          // Audio capture failed - might be a temporary hardware issue
+          showTemporaryMessage("Could not access microphone. Check your device settings.", "error");
+          // Try to restart instead of stopping completely
+          setTimeout(() => {
+            if (state.isListening) {
+              startListening();
+            }
+          }, 1000);
+          break;
+          
+        case "not-allowed":
+        case "service-not-allowed":
+          // User denied permission or service not allowed
+          showTemporaryMessage("Microphone access denied. Please allow microphone access in your browser settings.", "error");
+          stopListening();
+          break;
+          
+        case "aborted":
+          // Recognition was aborted - can be normal during reset
+          if (state.isListening && !state.recognitionRestartAttempts) {
+            setTimeout(() => {
+              if (state.isListening) {
+                try { recognition.start(); } catch(e) { /* suppress */ }
+              }
+            }, config.speech.errorResetDelay);
+          }
+          break;
+          
+        case "network":
+          // Network error - could retry with exponential backoff
+          showTemporaryMessage("Network error occurred. Check your connection.", "error");
+          if (state.isListening) {
+            const backoffDelay = Math.min(1000 * Math.pow(2, state.recognitionRestartAttempts), 10000);
+            setTimeout(() => {
+              if (state.isListening) {
+                try { recognition.start(); } catch(e) { /* suppress */ }
+              }
+            }, backoffDelay);
+            state.recognitionRestartAttempts++;
+          }
+          break;
+          
+        case "language-not-supported":
+          // Language not supported - fall back to English
+          showTemporaryMessage(`Language ${supportedLanguages[state.currentLanguageIndex].name} is not supported, falling back to English.`, "warning");
+          state.currentLanguageIndex = 0; // English
+          if (state.isListening) {
+            stopListening();
+            setTimeout(() => startListening(), 500);
+          }
+          break;
+          
+        default:
+          // Handle other errors
+          if (state.isListening) {
+            setTimeout(() => {
+              if (state.isListening) {
+                try { recognition.start(); } catch(e) { /* suppress */ }
+              }
+            }, config.speech.errorResetDelay);
+          }
+      }
+    };
+    
+    // Handle end of recognition
+    recognition.onend = () => {
+      debugLog("Speech recognition ended");
+      state.isTranscribing = false;
+      
+      // Clear continuous timer
+      if (state.continuousTimer) {
+        clearTimeout(state.continuousTimer);
+        state.continuousTimer = null;
+      }
+      
+      // Always restart if we're still supposed to be listening - no timeout
+      if (state.isListening) {
+        try {
+          state.recognitionRestartAttempts++;
+          
+          // If in error recovery mode, wait a bit longer
+          const restartDelay = state.errorRecoveryMode ? 
+            config.speech.errorResetDelay : 
+            50;
+          
+          // If too many restart attempts in short succession, reinitialize
+          if (state.recognitionRestartAttempts > 3) {
+            debugLog("Too many restart attempts, reinitializing recognition");
+            setTimeout(() => {
+              if (state.isListening) {
+                startListening();
+              }
+            }, restartDelay);
+            return;
+          }
+          
+          // Restart with appropriate delay
+          setTimeout(() => {
+            if (state.isListening) {
+              try {
+                recognition.start();
+                // Reset error recovery after successful restart
+                state.errorRecoveryMode = false;
+              } catch (e) {
+                debugLog("Could not restart recognition:", e);
+                
+                // Start a completely fresh session on failure
+                startListening();
+              }
+            }
+          }, restartDelay);
+        } catch (e) {
+          debugLog("Could not restart recognition:", e);
+          
+          // Start a completely fresh session on failure after a short delay
+          setTimeout(() => {
+            if (state.isListening) {
+              startListening();
+            }
+          }, 300);
+        }
+      } else {
+        // If not listening anymore, update visual indicators
+        if (document.querySelector('.recognition-indicator')) {
+          document.querySelector('.indicator-dot').classList.remove('active');
+          document.querySelector('.indicator-text').textContent = 'Ready to detect speech';
+        }
+      }
+    };
+    
+    // This is the key event for real-time transcription
+    recognition.onresult = (event) => {
+      // Reset restart attempts counter since we're successfully getting results
+      state.recognitionRestartAttempts = 0;
+      state.errorRecoveryMode = false;
+      
+      // Update speech activity state
+      state.lastSpeechTime = Date.now();
+      updateSpeechActivity(true);
+      
+      // Process speech results
+      processRecognitionResults(event);
+      
+      // Start inactivity timer
+      if (state.inactivityTimer) {
+        clearTimeout(state.inactivityTimer);
+      }
+      
+      state.inactivityTimer = setTimeout(() => {
+        updateSpeechActivity(false);
+        
+        // If we have pending interim text when speech appears complete,
+        // consider it as final and append to the session transcript
+        if (state.interimText && config.speech.keepFullTranscript) {
+          if (state.sessionTranscript && !state.sessionTranscript.endsWith(' ')) {
+            state.sessionTranscript += ' ';
+          }
+          state.sessionTranscript += state.interimText;
+          state.interimText = '';
+          
+          // Update display with full session transcript 
+          updateTranscriptText(state.sessionTranscript, true);
+          
+          // Send for translation
+          sendForTranslation(state.sessionTranscript);
+        }
+      }, config.speech.maxInactivityTime);
+    };
   }
 
   // Update transcript text with progressive display - word by word animation
@@ -868,33 +1258,70 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   // Update translation text with better visual feedback
-  function updateTranslation(text) {
-    // If the text is identical, don't re-animate
-    if (translatedTextElement.textContent === text) {
-      return;
+  function updateTranslation(text, isAppend = false) {
+    // Remove any temporary translation indicators
+    const indicators = translatedTextElement.querySelectorAll('.translation-indicator');
+    indicators.forEach(el => el.remove());
+    
+    if (isAppend && translatedTextElement.textContent && 
+        translatedTextElement.textContent !== "Translating...") {
+      // For incremental translations, append rather than replace
+      const currentText = translatedTextElement.textContent;
+      
+      // Only append if there's actually new content
+      if (text && !currentText.includes(text)) {
+        // Add a space if needed
+        const needsSpace = !currentText.endsWith(' ') && !text.startsWith(' ');
+        const newText = currentText + (needsSpace ? ' ' : '') + text;
+        
+        // Animate only the new part
+        const container = document.createElement('div');
+        const existingSpan = document.createElement('span');
+        existingSpan.textContent = currentText + (needsSpace ? ' ' : '');
+        container.appendChild(existingSpan);
+        
+        // Create spans for each word in the new content for animation
+        const newWords = text.split(/\s+/);
+        newWords.forEach((word, index) => {
+          const wordSpan = document.createElement('span');
+          wordSpan.className = 'word';
+          wordSpan.textContent = word + ' ';
+          wordSpan.style.animationDelay = `${index * 0.03}s`;
+          container.appendChild(wordSpan);
+        });
+        
+        translatedTextElement.innerHTML = '';
+        translatedTextElement.appendChild(container);
+      }
+    } else {
+      // If the text is identical, don't re-animate
+      if (translatedTextElement.textContent === text) {
+        return;
+      }
+      
+      translatedTextElement.className = "text-content lang-de final";
+      
+      // Split the translation into words for animation
+      const words = text.split(/\s+/);
+      const container = document.createElement('div');
+      
+      words.forEach((word, index) => {
+        const wordSpan = document.createElement('span');
+        wordSpan.className = 'word';
+        wordSpan.textContent = word + ' ';
+        wordSpan.style.animationDelay = `${index * 0.03}s`; // Slightly faster than transcription
+        container.appendChild(wordSpan);
+      });
+      
+      translatedTextElement.innerHTML = '';
+      translatedTextElement.appendChild(container);
     }
     
-    translatedTextElement.className = "text-content lang-de final";
-    
-    // Split the translation into words for animation
-    const words = text.split(/\s+/);
-    const container = document.createElement('div');
-    
-    words.forEach((word, index) => {
-      const wordSpan = document.createElement('span');
-      wordSpan.className = 'word';
-      wordSpan.textContent = word + ' ';
-      wordSpan.style.animationDelay = `${index * 0.03}s`; // Slightly faster than transcription
-      container.appendChild(wordSpan);
-    });
-    
-    translatedTextElement.innerHTML = '';
-    translatedTextElement.appendChild(container);
     state.pendingTranslation = false;
   }
 
   // Improved debounced function to send text for translation with minimal delay
-  function sendForTranslation(text) {
+  function sendForTranslation(text, isIncremental = false) {
     // Don't translate empty text
     if (!text || text.trim() === '') {
       return;
@@ -906,17 +1333,28 @@ document.addEventListener("DOMContentLoaded", function () {
     }
     
     // If this is the same text we already translated, skip
-    if (text === state.lastTranslationText) {
+    if (text === state.lastTranslationText && !isIncremental) {
       return;
     }
     
-    state.lastTranslationText = text;
+    if (!isIncremental) {
+      state.lastTranslationText = text;
+    }
+    
     state.pendingTranslation = true;
     
-    // If not already showing "Translating...", show it immediately
-    if (translatedTextElement.textContent !== "Translating...") {
+    // If not already showing "Translating...", show a small indicator
+    if (!isIncremental || translatedTextElement.textContent === "") {
       translatedTextElement.className = "text-content lang-de processing";
-      translatedTextElement.textContent = "Translating...";
+      if (translatedTextElement.textContent === "") {
+        translatedTextElement.textContent = "Translating...";
+      } else {
+        // Add a small indicator at the end of existing translation
+        const indicator = document.createElement('span');
+        indicator.className = 'translation-indicator';
+        indicator.textContent = ' ...';
+        translatedTextElement.appendChild(indicator);
+      }
     }
     
     // Send translation request with minimal debounce
@@ -928,6 +1366,7 @@ document.addEventListener("DOMContentLoaded", function () {
             text: text,
             source_language: supportedLanguages[state.currentLanguageIndex].shortCode,
             target_language: "de", // Always German
+            is_incremental: isIncremental
           })
         );
       } else {

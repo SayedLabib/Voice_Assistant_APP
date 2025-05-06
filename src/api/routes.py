@@ -76,6 +76,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 text = message.get("text", "")
                 source_lang = message.get("source_language", "auto")
                 target_lang = message.get("target_language", "de")  # Default to German
+                is_incremental = message.get("is_incremental", False)  # Check if this is an incremental update
                 
                 if not text:
                     continue
@@ -87,7 +88,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Send only the translation back to the client
                     await websocket.send_json({
                         "type": "translation_only",
-                        "translated_text": translated_text
+                        "translated_text": translated_text,
+                        "is_incremental": is_incremental  # Pass back this flag so client knows how to handle it
                     })
                 except Exception as e:
                     await websocket.send_json({
