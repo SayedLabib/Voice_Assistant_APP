@@ -2,11 +2,14 @@
 
 A lightweight industry-focused voice assistant built with FastAPI that:
 - Converts speech to German text (from any language)
+- Uses contextual translation with Groq AI for more natural translations
 - Reads the generated text back with text-to-speech
 
 ## Features
 
 - Speech recognition with multilingual support (converts to German)
+- Contextual translation using Groq's Llama 3 70B model
+- Special handling for cultural and religious content (including Quranic text)
 - Text-to-Speech for German language
 - Responsive UI with an animated microphone button
 - WebSocket-based continuous listening with 7-second inactivity timeout
@@ -16,6 +19,7 @@ A lightweight industry-focused voice assistant built with FastAPI that:
 
 - Python 3.8+
 - Libraries listed in requirements.txt
+- Groq API key (for contextual translation)
 
 ## Installation
 
@@ -26,28 +30,39 @@ A lightweight industry-focused voice assistant built with FastAPI that:
 pip install -r requirements.txt
 ```
 
-## Usage
-
-1. Navigate to the src directory:
-
-```bash
-cd src
+3. Create a `.env` file in the root directory with the following variables:
+```
+TTS_LANGUAGE=de
+STT_TIMEOUT=7
+GROQ_API_KEY=your_groq_api_key
+USE_GROQ=true
 ```
 
-2. Run the application:
+## Usage
+
+1. Run the application from the root directory:
 
 ```bash
 uvicorn main:app --reload
 ```
 
-3. Open your browser and go to http://localhost:8000
+2. Open your browser and go to http://localhost:8000
 
-4. Click on the microphone button to start speaking. The application will:
+3. Click on the microphone button to start speaking. The application will:
    - Listen to your speech
-   - Convert it to German text
-   - Read the text back using text-to-speech
+   - Convert it to text in the original language
+   - Translate it to German using contextual understanding (not just word-for-word)
+   - Read the German text back using text-to-speech
 
-5. The listening will automatically stop after 7 seconds of silence, or you can click the microphone button again to stop manually.
+4. The listening will automatically stop after 7 seconds of silence, or you can click the microphone button again to stop manually.
+
+## Contextual Translation
+
+This app uses Groq's Llama 3 70B model to provide contextual translations that:
+- Understand the full meaning of your speech, not just individual words
+- Maintain cultural nuances and contextual information
+- Properly handle specialized content like religious text (including Quranic verses)
+- Produce more natural-sounding translations
 
 ## Configuration
 
@@ -56,6 +71,9 @@ You can customize the following parameters in the `.env` file:
 ```
 TTS_LANGUAGE=de
 STT_TIMEOUT=7
+GROQ_API_KEY=your_groq_api_key
+USE_GROQ=true  # Set to false to use basic translation instead
+USE_WHISPER=true  # For OpenAI Whisper-based transcription
 ```
 
 ## Troubleshooting
@@ -68,18 +86,24 @@ If you encounter issues with audio recording:
   - On Mac: brew install portaudio
   - On Linux: sudo apt-get install libportaudio2
 
+If you see errors related to Groq:
+- Make sure your GROQ_API_KEY is correctly set in the .env file
+- Check that you have the latest version of the groq library installed
+
 ## Project Structure
 ```
 voice-assistant-fastapi
+├── main.py                # Entry point of the FastAPI application
 ├── src
-│   ├── main.py                # Entry point of the FastAPI application
 │   ├── api
-│   │   ├── __init__.py        # API package initializer
-│   │   └── routes.py          # API routes for voice assistant
+│   │   ├── __init__.py    # API package initializer
+│   │   └── routes.py      # API routes for voice assistant
 │   ├── services
-│   │   ├── __init__.py        # Services package initializer
+│   │   ├── __init__.py    # Services package initializer
 │   │   ├── stt_service.py      # Speech-to-Text service implementation
-│   │   └── tts_service.py      # Text-to-Speech service implementation
+│   │   ├── tts_service.py      # Text-to-Speech service implementation
+│   │   ├── groq_translation_service.py  # Contextual translation with Groq
+│   │   └── whisper_stt_service.py       # Whisper API integration
 │   ├── static
 │   │   ├── css
 │   │   │   └── style.css       # CSS styles for the UI

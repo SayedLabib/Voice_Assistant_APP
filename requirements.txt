@@ -12,3 +12,5 @@ googletrans==3.1.0a0
 aiohttp>=3.8.0
 python-multipart>=0.0.5
 translate
+# For Groq contextual translation
+groq

@@ -6,17 +6,20 @@ import os
 from dotenv import load_dotenv
 from services.stt_service import STTService
 from services.whisper_stt_service import WhisperSTTService
+from services.groq_translation_service import GroqTranslationService
 import asyncio
 
 # Load environment variables
 load_dotenv()
 USE_WHISPER = os.getenv("USE_WHISPER", "true").lower() == "true"  # Default to using Whisper
+USE_GROQ = os.getenv("USE_GROQ", "true").lower() == "true"  # Default to using Groq for contextual translation
 
 router = APIRouter()
 
 # Initialize services
 stt_service = STTService()
 whisper_stt_service = WhisperSTTService() if USE_WHISPER else None
+groq_service = GroqTranslationService() if USE_GROQ else None
 
 # Pydantic models for request validation
 class SpeechToTextRequest(BaseModel):
@@ -29,6 +32,9 @@ class AudioToTextRequest(BaseModel):
     language: str = "auto"
     target_language: str = "de"  # Default to German
 
+# Store session IDs for continuous context
+client_sessions = {}
+
 # Active WebSocket connections
 active_connections = {}
 
@@ -38,6 +44,10 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     client_id = id(websocket)
     active_connections[client_id] = websocket
+    
+    # Create a unique session ID for this client for contextual translation
+    session_id = f"session_{client_id}"
+    client_sessions[client_id] = session_id
     
     try:
         while True:
@@ -55,8 +65,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 
                 try:
-                    # Translate the text to German
-                    translated_text = await stt_service.recognize(text, source_lang, target_lang)
+                    # Use contextual Groq translation if available, otherwise fallback to basic translation
+                    if groq_service and len(text.split()) > 2:  # Only use Groq for phrases (not single words)
+                        translated_text = await groq_service.translate(
+                            text, 
+                            source_lang, 
+                            target_lang, 
+                            session_id=client_sessions.get(client_id)
+                        )
+                    else:
+                        translated_text = await stt_service.recognize(text, source_lang, target_lang)
                     
                     # Send the processed data back to the client
                     await websocket.send_json({
@@ -82,8 +100,21 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 
                 try:
-                    # Translate the text to German
-                    translated_text = await stt_service.recognize(text, source_lang, target_lang)
+                    # Use different translation strategies based on the text length and if it's incremental
+                    if is_incremental and len(text.split()) < 3:
+                        # For very short incremental updates, use basic translation for speed
+                        translated_text = await stt_service.recognize(text, source_lang, target_lang)
+                    elif groq_service:
+                        # Use Groq for contextual translation
+                        translated_text = await groq_service.translate(
+                            text, 
+                            source_lang, 
+                            target_lang, 
+                            session_id=client_sessions.get(client_id)
+                        )
+                    else:
+                        # Fallback to basic translation
+                        translated_text = await stt_service.recognize(text, source_lang, target_lang)
                     
                     # Send only the translation back to the client
                     await websocket.send_json({
@@ -129,9 +160,20 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
                     
                     # Start translation in parallel for efficiency
-                    translation_task = asyncio.create_task(
-                        stt_service.recognize(text, detected_language, target_lang)
-                    )
+                    # Use Groq for contextual translation if available
+                    if groq_service and len(text.split()) > 2:
+                        translation_task = asyncio.create_task(
+                            groq_service.translate(
+                                text, 
+                                detected_language, 
+                                target_lang, 
+                                session_id=client_sessions.get(client_id)
+                            )
+                        )
+                    else:
+                        translation_task = asyncio.create_task(
+                            stt_service.recognize(text, detected_language, target_lang)
+                        )
                     
                     # Send intermediate response immediately with just the original text
                     # This provides instant feedback to the user while translation is in progress
@@ -173,6 +215,8 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         if client_id in active_connections:
             del active_connections[client_id]
+        if client_id in client_sessions:
+            del client_sessions[client_id]
     except Exception as e:
         if client_id in active_connections:
             try:
@@ -183,6 +227,8 @@ async def websocket_endpoint(websocket: WebSocket):
             except:
                 pass
             del active_connections[client_id]
+        if client_id in client_sessions:
+            del client_sessions[client_id]
 
 @router.post("/transcribe_audio", response_model=dict)
 async def transcribe_audio(request: AudioToTextRequest):
@@ -207,8 +253,14 @@ async def transcribe_audio(request: AudioToTextRequest):
         text = result.get("text", "")
         detected_language = result.get("detected_language", request.language)
         
-        # Translate to German
-        translated_text = await stt_service.recognize(text, detected_language, target_lang)
+        # Translate to German using contextual translation if available
+        if groq_service and len(text.split()) > 2:
+            # Use a generic session ID for REST API calls
+            translated_text = await groq_service.translate(
+                text, detected_language, target_lang, session_id="api_session"
+            )
+        else:
+            translated_text = await stt_service.recognize(text, detected_language, target_lang)
         
         return {
             "success": True, 
