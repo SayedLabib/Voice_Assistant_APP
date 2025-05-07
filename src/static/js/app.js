@@ -37,7 +37,7 @@ document.addEventListener("DOMContentLoaded", function () {
     },
     speech: {
       keepFullTranscript: true, // Keep full session transcript
-      maxInactivityTime: 5000, // Time in ms before considering speech "completed"
+      maxInactivityTime: 3000, // Reduced from 5000ms to 3000ms to create more natural breaks
       maxContinuousListeningTime: 60000, // 60 seconds max continuous listening before reset
       errorResetDelay: 1000 // Time to wait before resetting after an error
     }
@@ -523,6 +523,13 @@ document.addEventListener("DOMContentLoaded", function () {
     
     // If we have a final transcript part
     if (finalTranscript) {
+      // Check if this finalTranscript is the same as our current interimText
+      // This prevents duplication when interim text becomes final
+      if (state.interimText && finalTranscript.trim() === state.interimText.trim()) {
+        // Clear the interim text since it's now being treated as final
+        state.interimText = '';
+      }
+      
       // Append to session transcript if that option is enabled
       if (config.speech.keepFullTranscript) {
         // Add space before appending if needed
@@ -530,14 +537,14 @@ document.addEventListener("DOMContentLoaded", function () {
           state.sessionTranscript += ' ';
         }
         
-        // Store previous length to know what's new
-        const previousLength = state.sessionTranscript.length;
+        // Store the final transcript
         state.sessionTranscript += finalTranscript;
         
-        // Update the display with the full session transcript plus any interim text
-        updateTranscriptText(state.sessionTranscript + (interimTranscript ? " " + interimTranscript : ""), false);
+        // Update the display with just the session transcript
+        // No longer adding interim text to avoid duplication
+        updateTranscriptText(state.sessionTranscript, true);
         
-        // Save the current recognized text (session + interim)
+        // Save the current recognized text
         state.recognizedText = state.sessionTranscript;
         
         // Send ONLY the new segment for translation
@@ -552,14 +559,21 @@ document.addEventListener("DOMContentLoaded", function () {
     
     // If we only have interim results
     if (interimTranscript && !finalTranscript) {
-      state.interimText = interimTranscript;
-      
-      if (config.speech.keepFullTranscript) {
-        // Show full session plus current interim
-        updateTranscriptText(state.sessionTranscript + (interimTranscript ? " " + interimTranscript : ""), false);
-      } else {
-        // Just show current interim
-        updateTranscriptText(interimTranscript, false);
+      // Only update if the interim text has actually changed
+      if (interimTranscript !== state.interimText) {
+        state.interimText = interimTranscript;
+        
+        if (config.speech.keepFullTranscript) {
+          // Show full session plus current interim
+          // But make sure we don't add duplicate content
+          const combinedText = state.sessionTranscript + 
+            (state.sessionTranscript && interimTranscript ? " " : "") + 
+            interimTranscript;
+          updateTranscriptText(combinedText, false);
+        } else {
+          // Just show current interim
+          updateTranscriptText(interimTranscript, false);
+        }
       }
     }
   }
@@ -1263,36 +1277,70 @@ document.addEventListener("DOMContentLoaded", function () {
     const indicators = translatedTextElement.querySelectorAll('.translation-indicator');
     indicators.forEach(el => el.remove());
     
+    // Skip empty translations
+    if (!text || text.trim() === '') {
+      return;
+    }
+    
     if (isAppend && translatedTextElement.textContent && 
         translatedTextElement.textContent !== "Translating...") {
       // For incremental translations, append rather than replace
       const currentText = translatedTextElement.textContent;
       
-      // Only append if there's actually new content
-      if (text && !currentText.includes(text)) {
-        // Add a space if needed
-        const needsSpace = !currentText.endsWith(' ') && !text.startsWith(' ');
-        const newText = currentText + (needsSpace ? ' ' : '') + text;
-        
-        // Animate only the new part
-        const container = document.createElement('div');
-        const existingSpan = document.createElement('span');
-        existingSpan.textContent = currentText + (needsSpace ? ' ' : '');
-        container.appendChild(existingSpan);
-        
-        // Create spans for each word in the new content for animation
-        const newWords = text.split(/\s+/);
-        newWords.forEach((word, index) => {
-          const wordSpan = document.createElement('span');
-          wordSpan.className = 'word';
-          wordSpan.textContent = word + ' ';
-          wordSpan.style.animationDelay = `${index * 0.03}s`;
-          container.appendChild(wordSpan);
-        });
-        
-        translatedTextElement.innerHTML = '';
-        translatedTextElement.appendChild(container);
+      // More sophisticated check to prevent duplications:
+      // 1. Exact match check
+      if (currentText === text) {
+        return;
       }
+      
+      // 2. Check if this text is already at the end of the current translation
+      // This prevents common duplication scenarios
+      const lastSentenceInCurrent = currentText.split(/[.!?]\s+/).pop() || '';
+      const firstSentenceInNew = text.split(/[.!?]\s+/)[0] || '';
+      
+      // If the new text starts with the end of the current text, only add what's new
+      if (lastSentenceInCurrent.trim() && 
+          firstSentenceInNew.trim() && 
+          firstSentenceInNew.includes(lastSentenceInCurrent)) {
+        // Extract only the truly new part
+        const overlapIndex = text.indexOf(lastSentenceInCurrent);
+        if (overlapIndex === 0) {
+          // The new text starts with the last sentence of current text
+          // Only add what comes after that last sentence
+          const newPortion = text.substring(lastSentenceInCurrent.length);
+          if (newPortion.trim()) {
+            // Only proceed if we have actual new content
+            const needsSpace = !currentText.endsWith(' ') && !newPortion.startsWith(' ');
+            const combinedText = currentText + (needsSpace ? ' ' : '') + newPortion;
+            translatedTextElement.textContent = combinedText;
+          }
+          return;
+        }
+      }
+      
+      // If we reach here, we're adding new content with no obvious overlap
+      // Add a space if needed
+      const needsSpace = !currentText.endsWith(' ') && !text.startsWith(' ');
+      const newText = currentText + (needsSpace ? ' ' : '') + text;
+      
+      // Create animation for the new content only
+      const container = document.createElement('div');
+      const existingSpan = document.createElement('span');
+      existingSpan.textContent = currentText + (needsSpace ? ' ' : '');
+      container.appendChild(existingSpan);
+      
+      // Create spans for each word in the new content for animation
+      const newWords = text.split(/\s+/);
+      newWords.forEach((word, index) => {
+        const wordSpan = document.createElement('span');
+        wordSpan.className = 'word';
+        wordSpan.textContent = word + ' ';
+        wordSpan.style.animationDelay = `${index * 0.03}s`;
+        container.appendChild(wordSpan);
+      });
+      
+      translatedTextElement.innerHTML = '';
+      translatedTextElement.appendChild(container);
     } else {
       // If the text is identical, don't re-animate
       if (translatedTextElement.textContent === text) {
