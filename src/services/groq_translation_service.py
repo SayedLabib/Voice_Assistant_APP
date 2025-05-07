@@ -56,6 +56,30 @@ class GroqTranslationService:
             r'آية',  # Verse/Ayah
         ]
         
+        # Dictionary of Quranic address forms with their German translations
+        self.quranic_addresses = {
+            "يا أيها النبي": "O Prophet (Friede sei mit ihm)",
+            "يا محمد": "O Muhammad (Friede sei mit ihm)",
+            "يا أيها الناس": "O ihr Menschen",
+            "يا أيها الذين آمنوا": "O ihr, die glauben",
+            "يا عباد": "O Meine Diener",
+            "يا عبادي": "O Meine Diener",
+            "يا بني آدم": "O Kinder Adams",
+            "يا أيها الرسول": "O Gesandter (Friede sei mit ihm)",
+            "يا أيها المدثر": "O du Zugedeckter (Friede sei mit ihm)",
+            "يا أيها المزمل": "O du Eingehüllter (Friede sei mit ihm)",
+            "قل": "Sprich",
+            "يا جبريل": "O Gabriel",
+            "يا عيسى": "O Jesus (Friede sei mit ihm)",
+            "يا موسى": "O Moses (Friede sei mit ihm)",
+            "يا نوح": "O Noah (Friede sei mit ihm)",
+            "يا إبراهيم": "O Abraham (Friede sei mit ihm)",
+            "يا داوود": "O David (Friede sei mit ihm)",
+            "يا سليمان": "O Solomon (Friede sei mit ihm)",
+            "يا يحيى": "O Johannes (Friede sei mit ihm)",
+            "يا زكريا": "O Zacharias (Friede sei mit ihm)"
+        }
+        
         # Combine patterns
         self.quran_regex = re.compile('|'.join(self.quran_patterns))
         
@@ -87,11 +111,41 @@ class GroqTranslationService:
         if self.quran_regex.search(text):
             return True
             
-        # Additional heuristics for identifying Quranic text
+        # Additional heuristics for identifying Quranic text including various forms of address
+        address_patterns = [
+            "يا أيها النبي",  # O Prophet
+            "يا محمد",        # O Muhammad
+            "يا أيها الناس",  # O mankind/people
+            "يا أيها الذين",  # O you who (believe)
+            "يا عباد",        # O servants
+            "يا بني آدم",     # O children of Adam
+            "يا أيها الرسول", # O Messenger
+            "يا جبريل",       # O Gabriel/Jibreel
+            "قل",             # Say (command form often used by Allah to address the Prophet)
+            "يا عيسى",        # O Jesus
+            "يا موسى",        # O Moses
+            "يا نوح",         # O Noah
+            "يا إبراهيم"      # O Abraham
+        ]
+        
+        for pattern in address_patterns:
+            if pattern in text:
+                return True
+                
         if "قرآن" in text or "آيات" in text or "سورة" in text:
             return True
             
         return False
+    
+    def find_addresses_in_text(self, text):
+        """Find all Quranic addresses in the given text and return a list of found addresses"""
+        found_addresses = []
+        
+        for address in self.quranic_addresses.keys():
+            if address in text:
+                found_addresses.append((address, self.quranic_addresses[address]))
+                
+        return found_addresses
     
     async def translate(self, text, source_lang="auto", target_lang="de", session_id=None):
         """
@@ -134,32 +188,47 @@ class GroqTranslationService:
         # Check if this might be Quranic text
         is_quranic = self.is_likely_quranic(text, source_lang)
         
+        # Find any specific addresses in the text
+        found_addresses = self.find_addresses_in_text(text) if is_quranic and source_lang == "ar" else []
+        
+        # Create specific instructions about the addresses found
+        address_instructions = ""
+        if found_addresses:
+            address_instructions = "\nThe text contains the following divine addresses that MUST be preserved exactly in the translation:\n"
+            for arabic, german in found_addresses:
+                address_instructions += f"- \"{arabic}\" must be translated as \"{german}\"\n"
+        
         # Define the base system prompt
-        system_prompt = """You are a precise translator with expertise in linguistic nuances and cultural context. 
-Follow these strict guidelines:
-1. Translate directly without adding ANYTHING extra - no explanations, comments, or embellishments
-2. Preserve the original meaning, tone, and cultural context precisely
-3. Provide ONLY the translation, nothing else
-4. Do NOT add any prefixes like "Translation:" or "Here's the translation:"
-5. Maintain religious and cultural terminology appropriately
+        system_prompt = """You are a skilled translator with expertise in linguistic nuances and cultural context. 
+Follow these guidelines:
+1. Provide a contextual, natural-sounding translation that captures the full meaning
+2. Consider cultural nuances and implicit context when translating
+3. Aim for a translation that sounds natural to native speakers
+4. Preserve the original tone and intended message
+5. Do NOT add any prefixes like "Translation:" or "Here's the translation:"
 6. Return only the final translation text, nothing more"""
 
         # Add specialized instructions for Quranic text
         if is_quranic:
-            system_prompt += """
-7. This appears to be Quranic text or Islamic religious content. When translating:
-   - Preserve the proper Islamic theological meaning
-   - Use established translations of religious terminology
-   - Maintain the reverence and spiritual significance
-   - Focus on accuracy rather than literary style for sacred text"""
+            system_prompt += f"""
+7. IMPORTANT: This appears to be Quranic text or Islamic religious content. For this content:
+   - Maintain ABSOLUTE FIDELITY to the original text's theological meaning
+   - DO NOT add interpretations, explanations, or embellishments to Quranic content
+   - Preserve the EXACT theological meaning without alteration
+   - ALL divine addresses MUST be explicitly preserved (e.g., "O Prophet", "O Mankind")
+   - NEVER omit any form of address in your translation - this is CRITICAL
+   - The relationship between Allah (the speaker) and the addressee is sacred and MUST be maintained
+   - Include appropriate honorifics such as "Friede sei mit ihm" for prophets
+   - Imperatives like "قل" ("Say") are divine commands and must be preserved as "Sprich:" in German
+   - Unlike regular text, Quranic verses must be translated with utmost precision{address_instructions}"""
         
         # Craft prompt for contextual translation
         if source_lang == "auto":
-            user_prompt = f"""Translate the following text into {target_lang_name}:
+            user_prompt = f"""Translate the following text into {target_lang_name}, providing a contextual, natural-sounding translation:
 
 {text}"""
         else:
-            user_prompt = f"""Translate the following {source_lang_name} text into {target_lang_name}:
+            user_prompt = f"""Translate the following {source_lang_name} text into {target_lang_name}, providing a contextual, natural-sounding translation:
 
 {text}"""
 
@@ -171,7 +240,7 @@ Follow these strict guidelines:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                "temperature": 0.2,
+                "temperature": 0.1,  # Lower temperature for more precise translations
                 "max_tokens": 1024
             }
             
@@ -195,6 +264,15 @@ Follow these strict guidelines:
                         
                         # Clean up the response
                         translated_text = self.clean_translation(translated_text)
+                        
+                        # Post-process to ensure addresses are preserved
+                        if found_addresses and is_quranic:
+                            for arabic, german in found_addresses:
+                                # Check if the German translation contains the appropriate form of address
+                                if german.split(' ')[0:2] not in translated_text and german.split(' ')[0] not in translated_text:
+                                    # If not found, try to correct by prepending it
+                                    # This is a fallback in case the model still omits the address
+                                    translated_text = f"{german}: {translated_text}"
                             
                         # Store in history if session_id provided
                         if session_id:
