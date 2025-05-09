@@ -33,7 +33,7 @@ document.addEventListener("DOMContentLoaded", function () {
   // Configuration
   const config = {
     translation: {
-      debounceDelay: 200, // Reduced debounce time for faster translation
+      debounceDelay: 180, // Reduced debounce time for faster translation
     },
     speech: {
       keepFullTranscript: true, // Keep full session transcript
