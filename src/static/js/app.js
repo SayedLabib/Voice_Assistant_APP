@@ -33,12 +33,12 @@ document.addEventListener("DOMContentLoaded", function () {
   // Configuration
   const config = {
     translation: {
-      debounceDelay: 300, // Reduced debounce time for faster translation
+      debounceDelay: 200, // Reduced debounce time for faster translation
     },
     speech: {
       keepFullTranscript: true, // Keep full session transcript
       maxInactivityTime: 1000, // Reduced from 5000ms to 3000ms to create more natural breaks
-      maxContinuousListeningTime: 300000, // Increased from 60000ms (1 min) to 300000ms (5 mins)
+      maxContinuousListeningTime: 400000, // Increased from 60000ms (1 min) to 300000ms (5 mins)
       errorResetDelay: 10000 // Time to wait before resetting after an error
     }
   };
