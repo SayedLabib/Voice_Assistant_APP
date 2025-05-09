@@ -37,9 +37,9 @@ document.addEventListener("DOMContentLoaded", function () {
     },
     speech: {
       keepFullTranscript: true, // Keep full session transcript
-      maxInactivityTime: 3000, // Reduced from 5000ms to 3000ms to create more natural breaks
+      maxInactivityTime: 1000, // Reduced from 5000ms to 3000ms to create more natural breaks
       maxContinuousListeningTime: 300000, // Increased from 60000ms (1 min) to 300000ms (5 mins)
-      errorResetDelay: 1000 // Time to wait before resetting after an error
+      errorResetDelay: 10000 // Time to wait before resetting after an error
     }
   };
 
