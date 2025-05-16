@@ -21,7 +21,27 @@ A lightweight industry-focused voice assistant built with FastAPI that:
 - Libraries listed in requirements.txt
 - Groq API key (for contextual translation)
 
-## Installation
+## Quick Start with Docker
+
+1. **Build and run with Docker Compose:**
+
+```bash
+docker-compose up --build
+```
+
+2. The app will be available at [http://localhost:8000](http://localhost:8000)
+
+3. Make sure to create a `.env` file in the root directory with the following variables:
+
+```
+TTS_LANGUAGE=de
+STT_TIMEOUT=7
+GROQ_API_KEY=your_groq_api_key
+USE_GROQ=true
+USE_WHISPER=true
+```
+
+## Manual Installation (without Docker)
 
 1. Clone this repository
 2. Install the required dependencies:
@@ -30,31 +50,24 @@ A lightweight industry-focused voice assistant built with FastAPI that:
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file in the root directory with the following variables:
-```
-TTS_LANGUAGE=de
-STT_TIMEOUT=7
-GROQ_API_KEY=your_groq_api_key
-USE_GROQ=true
-```
+3. Create a `.env` file in the root directory as shown above.
 
-## Usage
-
-1. Run the application from the root directory:
+4. Run the application from the root directory:
 
 ```bash
 uvicorn main:app --reload
 ```
 
-2. Open your browser and go to http://localhost:8000
+5. Open your browser and go to [http://localhost:8000](http://localhost:8000)
 
-3. Click on the microphone button to start speaking. The application will:
-   - Listen to your speech
-   - Convert it to text in the original language
-   - Translate it to German using contextual understanding (not just word-for-word)
-   - Read the German text back using text-to-speech
+## Usage
 
-4. The listening will automatically stop after 7 seconds of silence, or you can click the microphone button again to stop manually.
+- Click on the microphone button to start speaking. The application will:
+  - Listen to your speech
+  - Convert it to text in the original language
+  - Translate it to German using contextual understanding (not just word-for-word)
+  - Read the German text back using text-to-speech
+- The listening will automatically stop after 7 seconds of silence, or you can click the microphone button again to stop manually.
 
 ## Contextual Translation
 
@@ -112,6 +125,8 @@ voice-assistant-fastapi
 │   └── templates
 │       └── index.html          # Main HTML template for the UI
 ├── requirements.txt            # Project dependencies
+├── Dockerfile                  # Docker build instructions
+├── docker-compose.yml          # Docker Compose configuration
 ├── README.md                   # Project documentation
 └── .env                        # Environment variables for configuration
 ```
